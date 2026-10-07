@@ -1,0 +1,26 @@
+{
+  // Velora on Cloudflare: static frontend + API proxy. The Python/SQLite API runs
+  // elsewhere (see docs/CLOUDFLARE.md) and is reached through this Worker.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "velora",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-10-07",
+  "workers_dev": true,
+
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS",
+    // The SPA is hash-routed, but /verify?token=… and /c/<handle> are real paths.
+    "not_found_handling": "single-page-application",
+    // Static files never invoke the Worker; only the API does.
+    "run_worker_first": ["/api/*"]
+  },
+
+  "vars": {
+    // REQUIRED: https origin of your Velora API (no path). Example: https://velora-api.fly.dev
+    "ORIGIN_URL": ""
+  },
+
+  "observability": { "enabled": true }
+  // Secret (never in this file): EDGE_SECRET  →  `npx wrangler secret put EDGE_SECRET`
+}
