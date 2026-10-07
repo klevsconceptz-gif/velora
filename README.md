@@ -82,7 +82,7 @@ itself. Velora does not automate payouts.
 ## Tests
 
 ```bash
-python3 tests/run_tests.py      # 432 tests across 17 suites, with a summary table
+python3 tests/run_tests.py      # 434 tests across 17 suites, with a summary table
 ```
 
 `python3 tests/run_tests.py --list` shows the suites. Each test builds its own

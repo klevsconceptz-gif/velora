@@ -23,7 +23,7 @@ function studioTabs(active) {
     ['Posts', '/studio/posts', 'posts'],
     ['Tiers', '/studio/tiers', 'tiers'],
     ['Members', '/studio/members', 'members'],
-    ['Wallets', '/studio/payout', 'payout'],
+    ['Crypto payment', '/studio/payout', 'payout'],
   ];
   return el('nav', { class: 'tabs', 'aria-label': 'Studio sections' },
     tabs.map(([label, href, key]) => el('a', {
@@ -59,9 +59,9 @@ export async function studioPage(params, query, context) {
   );
   verificationGate(session.user, container);
   if (!overview.payout.wallets.length) {
-    container.append(notice('warning', 'Add a wallet address to start earning',
+    container.append(notice('warning', 'Add a crypto payment wallet to start earning',
       'Members can only check out in the coins you have an address for. Add at least one — Bitcoin, Ethereum, Tether (USDT) and others are supported.',
-      el('div', { class: 'button-row' }, el('a', { class: 'button button--primary button--small', href: '#/studio/payout', text: 'Add wallet addresses' }))));
+      el('div', { class: 'button-row' }, el('a', { class: 'button button--primary button--small', href: '#/studio/payout', text: 'Add crypto payment wallets' }))));
   }
 
   container.append(el('section', { 'aria-label': 'Key numbers' },
@@ -632,8 +632,8 @@ export async function payoutPage(params, query, context) {
   const saved = new Map(payout.wallets.map((wallet) => [wallet.asset.key, wallet]));
   const container = el('div', { class: 'stack-lg' },
     el('header', {},
-      el('h1', { text: 'Wallet addresses' }),
-      el('p', { class: 'lede', text: 'Add a receiving address for each coin or token you want to accept — Bitcoin, Ethereum, Tether (USDT) and more. Members can only pay you in the coins you add here.' }),
+      el('h1', { text: 'Crypto payment wallets' }),
+      el('p', { class: 'lede', text: 'Your wallet space for crypto payment: add a receiving address for each coin or token you want to accept — Bitcoin, Ethereum, Tether (USDT) and more. Members can only pay you in the coins you add here.' }),
     ),
     studioTabs('payout'),
     notice('warning', 'Read this before saving',

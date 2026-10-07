@@ -400,7 +400,7 @@ export async function applyPage(params, query, context) {
   const submit = ui.submitButton('Submit application');
   const walletInputs = new Map();
   const walletSection = el('fieldset', { class: 'stack' },
-    el('legend', { text: 'Wallet addresses (optional now, needed before members can pay you)' }),
+    el('legend', { text: 'Crypto payment wallets (optional now, needed before members can pay you)' }),
     el('p', { class: 'subtle', text: 'Add a receiving address for each coin or token you want to accept. Use the exact network shown. You can add or change these any time in the studio. Never enter a seed phrase or private key.' }),
   );
   (appState.paymentAssets || []).forEach((asset) => {

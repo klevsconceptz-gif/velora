@@ -496,9 +496,9 @@ function expectText(routeName, needles) {
     if (!text.includes(needle)) problems.push(`${routeName} did not render ${JSON.stringify(needle)}`);
   }
 }
-expectText('studioPayout', ['Wallet addresses', 'Tether and stablecoins', 'USDT · Tron (TRC-20)', 'USDT · Ethereum (ERC-20)',
+expectText('studioPayout', ['Crypto payment wallets', 'Tether and stablecoins', 'USDT · Tron (TRC-20)', 'USDT · Ethereum (ERC-20)',
   'ETH', 'Remove', 'Never paste a seed phrase']);
-expectText('apply', ['USDT · Tron (TRC-20)', 'Wallet addresses (optional now']);
+expectText('apply', ['USDT · Tron (TRC-20)', 'Crypto payment wallets (optional now']);
 {
   const quoteKey = Object.keys(fixtures).find((key) => key.startsWith('GET /api/payments/quote?tier_id='));
   if (!quoteKey) {

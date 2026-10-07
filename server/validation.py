@@ -28,7 +28,7 @@ MAX_NOTE = 2000
 MAX_PITCH = 1200
 MAX_DESCRIPTION_GENERAL = 300
 
-HANDLE_PATTERN = re.compile(r"^[a-z][a-z0-9](?:[a-z0-9_-]{1,28})[a-z0-9]$")
+HANDLE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253})\.[A-Za-z]{2,24}$")
 
 # Reserved so studio, admin and product routes can never be shadowed by a page.

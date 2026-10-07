@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import unittest
 
-from ..validation import MAX_NOTE
+from ..validation import MAX_NOTE, ValidationError, clean_handle
 from .harness import Client, VeloraTestCase
 
 LONG = "a" * 200
@@ -185,6 +185,19 @@ class ReasonFieldTests(VeloraTestCase):
             "target_type": "user", "target_id": self.member_id,
             "body": "Reviewed the report with the member."})
         self.assertEqual(response.status, 201, response.text)
+
+
+class HandleRulesTests(unittest.TestCase):
+    """The advertised rule is 3-30 characters, lowercase letters/numbers/-/_, no edge punctuation."""
+
+    def test_accepted_handles(self):
+        for handle in ("abc", "c-five", "a1b", "my_page", "Sample-Creator", "x" * 30, "7-days"):
+            self.assertEqual(clean_handle(handle), handle.lower(), handle)
+
+    def test_rejected_handles(self):
+        for handle in ("ab", "x" * 31, "-abc", "abc-", "_abc", "a b c", "a--b", "a__b", "a.b", "admin", "", "é-é-é"):
+            with self.assertRaises(ValidationError, msg=repr(handle)):
+                clean_handle(handle)
 
 
 if __name__ == "__main__":  # pragma: no cover
