@@ -74,6 +74,10 @@ def unavailable(message: str, *, code: str = "unavailable") -> ApiError:
 
 
 MAX_UNREAD_BODY = 64 * 1024 * 1024
+# When a body is too large we still read (and discard) up to this much before
+# answering, so the client can finish writing and actually read the 413 instead
+# of seeing a connection reset. Beyond this the socket is closed early on purpose.
+MAX_DRAIN_BODY = 32 * 1024 * 1024
 
 
 @dataclass
@@ -102,15 +106,46 @@ class Request:
             return
         self._body_loaded = True
         length = self.declared_length()
-        if limit and length > limit:
+        over_limit = bool(limit and length > limit)
+        if over_limit or length > MAX_UNREAD_BODY:
+            # Drain a bounded amount first: closing the socket mid-upload turns a
+            # clear "that image is too large" message into a network error in the
+            # browser, because the client is still writing when the response lands.
+            self._drain(min(length, MAX_DRAIN_BODY))
             raise ApiError(413, "payload_too_large",
                            "That request is larger than Velora accepts.")
         if not length:
             self.body = b""
             return
-        if length > MAX_UNREAD_BODY:
-            raise ApiError(413, "payload_too_large", "That request is larger than Velora accepts.")
-        self.body = self.environ["wsgi.input"].read(length)
+        self.body = self._read_body(self.environ["wsgi.input"], length)
+
+    def _drain(self, count: int, chunk: int = 64 * 1024) -> int:
+        """Read and discard up to ``count`` bytes of the request body."""
+        if count <= 0:
+            return 0
+        stream = self.environ.get("wsgi.input")
+        if stream is None:
+            return 0
+        remaining = count
+        drained = 0
+        while remaining > 0:
+            block = self._read_body(stream, min(chunk, remaining))
+            if not block:
+                break
+            drained += len(block)
+            remaining -= len(block)
+        return drained
+
+    @staticmethod
+    def _read_body(stream, count: int) -> bytes:
+        """Read from the request stream, turning a stall into a clean 408."""
+        try:
+            return stream.read(count)
+        except (TimeoutError, OSError) as exc:  # socket timeout or client abort
+            raise ApiError(
+                408, "request_timeout",
+                "The upload stopped before it finished. Nothing was saved — please try again.",
+            ) from exc
 
     # ---- input helpers --------------------------------------------------------
     def header(self, name: str, default: str | None = None) -> str | None:
@@ -289,6 +324,7 @@ _STATUS_REASONS = {
     403: "Forbidden",
     404: "Not Found",
     405: "Method Not Allowed",
+    408: "Request Timeout",
     409: "Conflict",
     410: "Gone",
     413: "Payload Too Large",

@@ -221,7 +221,6 @@ class TransportTests(VeloraTestCase):
         self.assertNotIn("secret", json.dumps(payload).lower())
 
     def test_health_reports_needs_migrations_on_an_empty_database(self):
-        from server.db import Database
         from server.app import Velora
         from server.config import build_config
         from server.services.context import build_context

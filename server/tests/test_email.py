@@ -7,7 +7,6 @@ the production rule that the file transport is refused.
 
 from __future__ import annotations
 
-import socket
 import socketserver
 import sys
 import threading

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from ..btcpay import btc_to_sats
-from ..db import now_iso
 from ..security import hmac_hex
 from .harness import Client, VeloraTestCase
 
@@ -409,8 +408,6 @@ class WebhookTests(VeloraTestCase):
 
 class WebhookUnconfiguredTests(VeloraTestCase):
     def test_unconfigured_webhook_secret_fails_closed(self):
-        import os
-
         from ..config import build_config
         from ..services.context import build_context
         from ..app import Velora

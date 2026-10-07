@@ -22,7 +22,15 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import Config, get_config
-from .http import ApiError, Request, Response, build_request, error_response, json_response
+from .http import (
+    ApiError,
+    Request,
+    Response,
+    bad_request,
+    build_request,
+    error_response,
+    json_response,
+)
 from .routing import (
     AUTH_ADMIN,
     AUTH_CREATOR,
@@ -34,6 +42,7 @@ from .routing import (
 )
 from .services import context as context_module
 from .services.accounts import CSRF_HEADER, SESSION_COOKIE, resolve_auth
+from .validation import ValidationError
 
 MAX_JSON_ERROR_CHARS = 400
 
@@ -155,6 +164,13 @@ class Velora:
                 response = json_response(response)
         except ApiError as error:
             response = error_response(error)
+        except ValidationError as error:
+            # Defence in depth: most services translate ValidationError into a 400
+            # themselves, but one that slips through is still the caller's mistake,
+            # never a server fault. Without this a too-long search string would 500.
+            response = error_response(
+                bad_request(error.message, code="validation_error", field=error.field)
+            )
         except Exception:  # noqa: BLE001
             traceback.print_exc()
             response = json_response(

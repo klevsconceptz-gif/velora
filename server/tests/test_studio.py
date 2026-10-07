@@ -8,7 +8,6 @@ and authorized administrators.
 
 from __future__ import annotations
 
-import json
 import unittest
 
 from .harness import Client, VeloraTestCase

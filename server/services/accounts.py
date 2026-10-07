@@ -12,7 +12,6 @@ Design notes
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 
 from .. import audit
@@ -34,7 +33,6 @@ from ..validation import (
     clean_bool,
     clean_display_name,
     clean_email,
-    clean_handle,
     clean_orientation,
     clean_text,
     orientation_kind,

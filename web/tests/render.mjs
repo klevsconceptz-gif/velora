@@ -301,11 +301,6 @@ function pickFixture(method, url, role) {
   const scoped = byRole[role] || {};
   const exact = scoped[`${method} ${request}`];
   if (exact) return exact;
-  const candidates = [];
-  for (const entry of Object.values(scoped)) {
-    if (entry.method) continue;
-    candidates.push(entry);
-  }
   for (const [key, entry] of Object.entries(scoped)) {
     const [keyMethod, keyUrl] = [key.slice(0, key.indexOf(' ')), key.slice(key.indexOf(' ') + 1)];
     if (keyMethod !== method) continue;
@@ -318,7 +313,7 @@ function pickFixture(method, url, role) {
     if (keyMethod !== method) continue;
     if (keyUrl === request || keyUrl.split('?')[0] === pathOnly) return entry;
   }
-  return candidates.length ? null : null;
+  return null;
 }
 
 function makeResponse(status, payload) {

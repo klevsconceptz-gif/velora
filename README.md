@@ -75,7 +75,7 @@ itself. Velora does not automate payouts.
 ## Tests
 
 ```bash
-python3 tests/run_tests.py      # 350 tests across 13 suites, with a summary table
+python3 tests/run_tests.py      # 374 tests across 15 suites, with a summary table
 ```
 
 `python3 tests/run_tests.py --list` shows the suites. Each test builds its own

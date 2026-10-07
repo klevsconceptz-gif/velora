@@ -22,10 +22,9 @@ import argparse
 import getpass
 import os
 import sys
-from pathlib import Path
 
 from . import __version__, audit
-from .config import build_config, get_config
+from .config import get_config
 from .db import Database, now_iso
 from .migrations import MigrationError, apply_all, status as migration_status
 from .security import hash_password, validate_password
@@ -347,6 +346,34 @@ def cmd_generate_secret(args) -> int:
     return 0
 
 
+# A client that opens a connection and then stalls would otherwise hold a worker
+# thread indefinitely. This timeout bounds every socket read/write so one slow
+# client cannot pin the server; real uploads are far quicker per operation.
+SOCKET_TIMEOUT_SECONDS = 30.0
+
+
+def build_server(config, host: str, port: int, app):
+    """The threaded WSGI server used by ``serve`` (and by the tests).
+
+    Kept in one place so the socket timeout cannot be applied inconsistently.
+    """
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+
+    class TimeoutHandler(WSGIRequestHandler):
+        timeout = SOCKET_TIMEOUT_SECONDS
+
+        def address_string(self) -> str:
+            # wsgiref's default performs a reverse DNS lookup per request.
+            return self.client_address[0]
+
+    class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    return make_server(host, port, app, server_class=ThreadingWSGIServer,
+                       handler_class=TimeoutHandler)
+
+
 def cmd_serve(args) -> int:
     config = get_config()
     if args.host:
@@ -360,14 +387,8 @@ def cmd_serve(args) -> int:
     host = args.host
     port = args.port
 
-    from socketserver import ThreadingMixIn
-    from wsgiref.simple_server import WSGIServer, make_server
-
-    class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
-        daemon_threads = True
-
     printing = args.quiet is False
-    with make_server(host, port, app, server_class=ThreadingWSGIServer) as server:
+    with build_server(config, host, port, app) as server:
         print(f"Velora {__version__} listening on http://{host}:{port}  (env: {config.environment})")
         if not config.email_configured:
             print("  email delivery: NOT configured — verification email cannot be sent")
