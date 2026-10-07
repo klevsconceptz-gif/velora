@@ -1,0 +1,136 @@
+name: CI
+
+# Velora has no third-party dependencies: the server is standard-library Python
+# and the frontend is plain ES modules. CI therefore installs nothing — it runs
+# the same command a developer runs locally, plus a boot smoke test that proves
+# a clean checkout serves the app.
+#
+# The test suites build their own temporary databases. BTCPay is faked inside the
+# test process and SMTP is a local stub, so no secrets are needed here.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Show runtime versions
+        run: |
+          python3 --version
+          node --version
+          sqlite3 --version || true
+
+      - name: Byte-compile every module
+        run: python3 -m compileall -q server web tests
+
+      - name: Run all test suites
+        run: python3 tests/run_tests.py
+
+      - name: Frontend render check (explicit)
+        run: |
+          python3 web/tests/capture_fixtures.py
+          node web/tests/render.mjs
+
+  boot:
+    name: Cold boot smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Start from an empty database and serve the app
+        env:
+          VELORA_ENV: development
+          VELORA_EMAIL_TRANSPORT: file
+          VELORA_EMAIL_OUTBOX: ${{ github.workspace }}/var/outbox
+          VELORA_EMAIL_FROM: Velora <no-reply@velora.test>
+          VELORA_TRUST_PROXY: '1'
+        run: |
+          set -euo pipefail
+          python3 -m server.cli migrate
+          python3 -m server.cli status
+          # nohup keeps the server alive after this step's shell exits.
+          nohup python3 web/serve.py --port 8000 --quiet > /tmp/velora.log 2>&1 &
+          disown || true
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/health.json
+
+      - name: The instance must be empty and honest about unconfigured features
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, urllib.request
+
+          def get(path):
+              with urllib.request.urlopen(f"http://127.0.0.1:8000{path}", timeout=10) as response:
+                  return response.status, json.loads(response.read())
+
+          status, health = get("/api/health")
+          assert status == 200 and health["ok"], health
+          assert health["migrations_applied"] == 11, health
+          # No BTCPay is configured in CI, and the app must say so rather than pretend.
+          assert health["btcpay_configured"] is False, health
+
+          status, creators = get("/api/creators")
+          assert status == 200 and creators["total"] == 0, creators
+
+          status, bootstrap = get("/api/bootstrap")
+          assert status == 200, status
+          assert bootstrap["checkout"]["available"] is False, bootstrap["checkout"]
+          assert bootstrap["checkout"]["reason"] == "btcpay_not_configured"
+          assert bootstrap["session"]["authenticated"] is False
+
+          status, payments = get("/api/payments/availability")
+          assert payments["available"] is False and payments["methods"] == [], payments
+          assert payments["auto_renewal"] is False, payments
+
+          status, privacy = get("/api/privacy/summary")
+          assert "not_collected" in privacy and "rights" in privacy, privacy
+          print("cold boot checks passed")
+          PY
+
+      - name: The SPA shell and assets are served
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8000/ | grep -q 'id="app"'
+          for asset in app.js ui.js api.js views-public.js views-account.js views-studio.js views-admin.js styles.css; do
+            curl -fsS -o /dev/null "http://127.0.0.1:8000/assets/$asset"
+          done
+          # Security headers must be present on both HTML and API responses.
+          # (HEAD is not offered on API routes, so read the headers from a GET.)
+          curl -fsS -D - -o /dev/null http://127.0.0.1:8000/ | grep -qi 'content-security-policy'
+          curl -fsS -D - -o /dev/null http://127.0.0.1:8000/api/health | grep -qi 'x-content-type-options'
+
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/velora.log || true
