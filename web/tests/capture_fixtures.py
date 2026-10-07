@@ -14,6 +14,10 @@ minimal DOM stub and renders every route.
 Run it manually after changing the API::
 
     python3 web/tests/capture_fixtures.py
+    python3 web/tests/capture_fixtures.py --output /tmp/api.json   # throwaway copy
+
+The test suite uses ``--output`` with a temporary file, so running the tests
+never rewrites the committed fixture (captured timestamps differ every run).
 
 No secrets are involved: the fake BTCPay credentials and the development secret
 key are generated inside the test harness and never written to the fixtures.
@@ -21,6 +25,7 @@ key are generated inside the test harness and never written to the fixtures.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -254,7 +259,13 @@ def capture(case: _World, world) -> dict:
     return {"fixtures": fixtures, "by_role": by_role, "failures": failures}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--output", default=str(FIXTURE_PATH),
+                        help="where to write the captured fixtures (default: the committed file)")
+    args = parser.parse_args(argv)
+    target = Path(args.output)
+
     case = _World()
     case.setUp()
     try:
@@ -264,10 +275,14 @@ def main() -> int:
         case.doCleanups()
         case.tearDown()
 
-    FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    FIXTURE_PATH.write_text(json.dumps(captured, indent=2, sort_keys=True), encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(captured, indent=2, sort_keys=True), encoding="utf-8")
+    try:
+        shown = target.relative_to(REPO_ROOT)
+    except ValueError:
+        shown = target
     print(f"captured {len(captured['fixtures'])} responses across "
-          f"{len(captured['by_role'])} roles -> {FIXTURE_PATH.relative_to(REPO_ROOT)}")
+          f"{len(captured['by_role'])} roles -> {shown}")
     if captured["failures"]:
         print("endpoints that did not return success:")
         for failure in captured["failures"]:

@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(here, '..');
-const fixturePath = path.join(here, 'fixtures', 'api.json');
+const fixturePath = process.env.VELORA_FIXTURES
+  ? path.resolve(process.env.VELORA_FIXTURES)
+  : path.join(here, 'fixtures', 'api.json');
 
 if (!fs.existsSync(fixturePath)) {
   console.error('Missing fixtures. Run: python3 web/tests/capture_fixtures.py');

@@ -13,6 +13,7 @@ Both are skipped when Node is unavailable; the fixture assertions still run.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -32,8 +33,9 @@ NODE = shutil.which("node")
 TIMEOUT = 300
 
 
-def run(command: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=TIMEOUT)
+def run(command: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True,
+                          timeout=TIMEOUT, env=env)
 
 
 class JavaScriptSyntaxTests(unittest.TestCase):
@@ -86,12 +88,22 @@ class FixtureTests(unittest.TestCase):
 @unittest.skipIf(NODE is None, "node is not installed")
 class RenderCheckTests(unittest.TestCase):
     def test_capture_then_render_every_route(self):
-        capture = run([sys.executable, "web/tests/capture_fixtures.py"])
-        self.assertEqual(capture.returncode, 0,
-                         f"fixture capture failed:\n{capture.stdout}\n{capture.stderr}")
-        self.assertIn("captured", capture.stdout)
+        """Capture into a temporary file: running tests must not rewrite the repo.
 
-        render = run([NODE, "web/tests/render.mjs"])
+        The captured payloads carry real timestamps, so writing them over the
+        committed fixtures would leave a dirty working tree on every run.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            fixture = Path(folder) / "api.json"
+            environment = {**os.environ, "VELORA_FIXTURES": str(fixture)}
+            capture = run([sys.executable, "web/tests/capture_fixtures.py",
+                           "--output", str(fixture)], env=environment)
+            self.assertEqual(capture.returncode, 0,
+                             f"fixture capture failed:\n{capture.stdout}\n{capture.stderr}")
+            self.assertIn("captured", capture.stdout)
+            self.assertTrue(fixture.is_file(), "capture wrote no fixture file")
+
+            render = run([NODE, "web/tests/render.mjs"], env=environment)
         self.assertEqual(render.returncode, 0,
                          f"frontend render check failed:\n{render.stdout}\n{render.stderr}")
         self.assertIn("frontend render check passed", render.stdout)
