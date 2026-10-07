@@ -194,7 +194,7 @@ pick this repository and branch, then:
 | --- | --- |
 | Project / Worker name | **`velora`** — must match `name` in `wrangler.jsonc`, or the build fails with a name-mismatch error |
 | Root directory | `/` (the folder that contains `wrangler.jsonc`) |
-| Build command | *(leave empty)* — there is no build step |
+| Build command | *(leave empty)* — there is no build step. (If the dashboard has `npm run build` from a template, that works too: `package.json` defines a no-op `build`.) |
 | Deploy command | `npx wrangler deploy` |
 | Version command | `npx wrangler versions upload` (default) |
 
