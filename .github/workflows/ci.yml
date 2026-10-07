@@ -134,3 +134,28 @@ jobs:
       - name: Show server log on failure
         if: failure()
         run: cat /tmp/velora.log || true
+
+  cloudflare:
+    name: Cloudflare Worker config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # The same install and validation Cloudflare's own build runs, minus the
+      # upload: no account, token or secret is needed here.
+      - name: Install wrangler (locked)
+        run: npm ci --no-audit --no-fund
+
+      - name: Worker unit tests
+        run: npm test
+
+      - name: Validate wrangler.jsonc and bundle the Worker (dry run)
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/wrangler-dry-run"

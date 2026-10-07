@@ -132,6 +132,10 @@ class Config:
     # catalog) and any per-asset BTCPay payment-method id overrides.
     payment_methods: tuple[str, ...] | None = None
     payment_method_ids: dict[str, str] = field(default_factory=dict)
+    # Shared secret that a trusted edge proxy (the Cloudflare Worker in
+    # ``cloudflare/``) sends with every API request. When set, the API refuses
+    # requests without it and takes the client address only from the proxy.
+    edge_secret: str | None = None
 
     # ---- feature availability -------------------------------------------------
     @property
@@ -233,6 +237,11 @@ def build_config(environ: dict | None = None) -> Config:
     frame_ancestors = (_env(environ, "VELORA_FRAME_ANCESTORS", default_ancestors)
                        or default_ancestors).strip()
 
+    edge_secret = _env(environ, "VELORA_EDGE_SECRET") or None
+    if edge_secret is not None and len(edge_secret) < 32:
+        raise RuntimeError("VELORA_EDGE_SECRET must be at least 32 characters "
+                           "(generate one with: python3 -m server.cli generate-secret)")
+
     btcpay_url = _env(environ, "VELORA_BTCPAY_URL")
     if btcpay_url:
         btcpay_url = btcpay_url.rstrip("/")
@@ -278,6 +287,7 @@ def build_config(environ: dict | None = None) -> Config:
         btcpay_allow_localhost=_env_bool(environ, "VELORA_BTCPAY_ALLOW_LOCALHOST", False),
         payment_methods=parse_asset_list(_env(environ, "VELORA_PAYMENT_METHODS")),
         payment_method_ids=parse_method_overrides(_env(environ, "VELORA_PAYMENT_METHOD_IDS")),
+        edge_secret=edge_secret,
     )
 
 

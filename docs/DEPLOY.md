@@ -1,5 +1,9 @@
 # Deploying Velora
 
+> **Cloudflare Workers?** The Python/SQLite API cannot run inside a Worker. Use the
+> split deployment in [CLOUDFLARE.md](CLOUDFLARE.md): frontend and `/api` proxy on
+> Workers, API on a host with a persistent disk.
+
 Velora is one process: a Python standard-library WSGI app that serves the JSON API,
 the single-page frontend and the uploaded media from the same origin. There is no
 build step, no bundler, no CDN and no JavaScript dependency to install.
@@ -135,6 +139,7 @@ either way.
 | `VELORA_SECRET_KEY` | dev key file | **Required in production.** `python3 -m server.cli generate-secret`. Rotating it invalidates sessions and rate-limit buckets. |
 | `VELORA_PUBLIC_BASE_URL` | derived from the request | Absolute base for verification and invitation links. Set it in production so links are correct behind a proxy. |
 | `VELORA_ALLOWED_ORIGINS` / `…_SUFFIXES` | empty | Extra origins allowed to make state-changing requests. |
+| `VELORA_EDGE_SECRET` | — | ≥ 32 characters. Enables *edge mode* for the Cloudflare Worker front end ([CLOUDFLARE.md](CLOUDFLARE.md)): `/api/*` requires the `x-velora-edge-secret` header (except `/api/health`) and the client address is read only from `x-velora-client-ip`. |
 | `VELORA_TRUST_PROXY` | `0` | Read forwarded client-IP headers (see above). |
 | `VELORA_SECURE_COOKIES` | `auto` | `auto` = Secure when the request is HTTPS, `always`, `never` (local development only). |
 | `VELORA_SESSION_TTL_SECONDS` | 14 days | Session lifetime. |

@@ -222,6 +222,10 @@ class Request:
         over ``X-Forwarded-For``, and every candidate is validated as an IP
         address so junk never reaches the rate limiter or the audit log.
         """
+        if "edge_mode" in self.state:
+            # Behind the trusted edge proxy only its own header counts; nothing a
+            # client sent can name a different address.
+            return self.state.get("edge_client_ip") or self.remote_addr
         if trust_proxy:
             from .netutil import forwarded_client_ip
 

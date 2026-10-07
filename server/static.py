@@ -44,6 +44,11 @@ def resolve(web_root: Path, request_path: str) -> Path | None:
     relative = request_path.lstrip("/")
     if not relative:
         relative = "index.html"
+    # Only the public site is served: no dot-files, no underscore config files
+    # (such as Cloudflare's _headers), no test code and no source files.
+    segments = [part for part in relative.split("/") if part]
+    if any(part.startswith((".", "_")) or part == "tests" or part == "__pycache__" for part in segments):
+        return None
     candidate = (web_root / relative).resolve()
     try:
         candidate.relative_to(web_root)
@@ -51,7 +56,7 @@ def resolve(web_root: Path, request_path: str) -> Path | None:
         return None
     if candidate.is_dir():
         candidate = candidate / "index.html"
-    if not candidate.is_file():
+    if not candidate.is_file() or candidate.suffix.lower() not in CONTENT_TYPES:
         return None
     return candidate
 

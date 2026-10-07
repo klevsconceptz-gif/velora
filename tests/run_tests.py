@@ -40,6 +40,8 @@ SUITES = [
     "server.tests.test_payments",
     "server.tests.test_wallets",
     "server.tests.test_multi_asset_payments",
+    "server.tests.test_edge",
+    "server.tests.test_cloudflare",
     "server.tests.test_studio",
     "server.tests.test_social_admin",
     "web.tests.test_spa",

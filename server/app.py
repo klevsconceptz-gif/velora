@@ -46,6 +46,10 @@ from .validation import ValidationError
 
 MAX_JSON_ERROR_CHARS = 400
 
+# Sent by the Cloudflare Worker (cloudflare/worker.js) on every proxied API request.
+EDGE_SECRET_HEADER = "x-velora-edge-secret"
+EDGE_CLIENT_IP_HEADER = "x-velora-client-ip"
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
@@ -130,7 +134,33 @@ class Velora:
             return self.handle_api(request)
         return self.handle_static(request)
 
+    def _check_edge(self, request: Request) -> None:
+        """Require the shared edge secret when one is configured.
+
+        ``/api/health`` stays open for platform health checks. Everything else must
+        arrive through the trusted proxy, which also supplies the client address.
+        """
+        secret = self.config.edge_secret
+        if not secret:
+            return
+        from .netutil import normalize_ip
+        from .security import constant_time_equal
+
+        request.state["edge_mode"] = True
+        presented = request.header(EDGE_SECRET_HEADER) or ""
+        if presented and constant_time_equal(presented, secret):
+            request.state["edge_client_ip"] = normalize_ip(request.header(EDGE_CLIENT_IP_HEADER))
+            return
+        if request.path == "/api/health":
+            return
+        raise ApiError(403, "edge_required",
+                       "This Velora API only accepts requests that come through its own front end.")
+
     def handle_api(self, request: Request) -> Response:
+        try:
+            self._check_edge(request)
+        except ApiError as error:
+            return self._finish(request, error_response(error))
         match = None
         method_mismatch = False
         for candidate in self.routes:

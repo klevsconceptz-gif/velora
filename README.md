@@ -79,10 +79,17 @@ invoice is not a paid membership and a browser redirect is not proof. Every sett
 invoice, ledger entry, webhook event and audit row is append-only in the schema
 itself. Velora does not automate payouts.
 
+## Cloudflare
+
+The frontend and an `/api` proxy deploy to Cloudflare Workers (`wrangler.jsonc`,
+`cloudflare/worker.js`); the Python/SQLite API stays on a host with a persistent
+disk. Full steps, secrets, troubleshooting and what was verified:
+[`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md).
+
 ## Tests
 
 ```bash
-python3 tests/run_tests.py      # 434 tests across 17 suites, with a summary table
+python3 tests/run_tests.py      # 454 tests across 19 suites, with a summary table
 ```
 
 `python3 tests/run_tests.py --list` shows the suites. Each test builds its own

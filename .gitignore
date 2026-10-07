@@ -43,3 +43,8 @@ Thumbs.db
 tmp/
 scratch/
 *.log
+
+# Cloudflare / wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*

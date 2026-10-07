@@ -1,0 +1,15 @@
+{
+  "name": "velora-edge",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare deployment tooling for Velora (the application itself has no JavaScript dependencies).",
+  "scripts": {
+    "test": "node --test cloudflare/tests/worker.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

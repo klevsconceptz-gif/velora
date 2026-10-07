@@ -27,3 +27,8 @@ node_modules/
 *.log
 Dockerfile
 .dockerignore
+cloudflare/
+wrangler.jsonc
+package.json
+package-lock.json
+.wrangler/
