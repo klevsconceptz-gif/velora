@@ -330,38 +330,10 @@ def clean_report_target(value, *, field: str = "target_type") -> str:
 
 
 def clean_btc_address(value, *, field: str = "btc_address") -> dict:
-    """Validate an on-chain BTC receiving address conservatively.
+    """Validate a Bitcoin receiving address (kept for callers of the original API)."""
+    from .wallets import validate_address
 
-    This performs a *format* check only (length, alphabet, bech32 mixed-case
-    rule). Velora makes no claim that the address belongs to the person who typed
-    it, and saving one never moves funds.
-    """
-    if not isinstance(value, str):
-        _fail("Enter a Bitcoin receiving address.", field)
-    address = value.strip()
-    if len(address) < 14 or len(address) > 100:
-        _fail("That does not look like a Bitcoin address.", field)
-    if any(char.isspace() for char in address):
-        _fail("Bitcoin addresses cannot contain spaces.", field)
-
-    if address.lower().startswith("bc1") or address.upper().startswith("BC1"):
-        if address != address.lower() and address != address.upper():
-            _fail("bech32 addresses must not mix upper and lower case.", field)
-        lowered = address.lower()
-        if not re.match(r"^bc1[023456789acdefghjklmnpqrstuvwxyz]+$", lowered):
-            _fail("That does not look like a valid Bitcoin address.", field)
-        if len(lowered) < 14 or len(lowered) > 90:
-            _fail("That Bech32 address has an unexpected length.", field)
-        kind = "bech32m" if len(lowered) >= 62 else "bech32"
-        return {"address": lowered, "kind": kind}
-
-    if re.match(r"^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$", address):
-        return {"address": address, "kind": "p2pkh" if address[0] == "1" else "p2sh"}
-
-    _fail(
-        "Use an on-chain mainnet Bitcoin address starting with 1, 3 or bc1.",
-        field,
-    )
+    return validate_address("btc", value, field=field)
 
 
 def validate_new_password(value, *, confirm=None, field: str = "password") -> str:

@@ -1,6 +1,6 @@
 # Velora
 
-A creator membership platform built around privacy, clarity and Bitcoin.
+A creator membership platform built around privacy, clarity and crypto-native payments.
 
 Velora is intentionally small and boring where it counts: one Python process
 (standard library only) serves the JSON API, the vanilla-JavaScript single-page app
@@ -34,8 +34,8 @@ and never revokes time already paid for. Nothing renews automatically.
 
 **For creators** — apply, then manage a page, tiers (integer USD cents, 30-day
 periods), image posts with public teasers, a members view without member email
-addresses, studio analytics from settled payments only, and a private on-chain BTC
-receiving address. Every creator action is authorised on the server.
+addresses, studio analytics from settled payments only, and private receiving
+wallet addresses (Bitcoin, Ethereum, Tether and more — one per coin they accept). Every creator action is authorised on the server.
 
 **For administrators** — a role-gated console for users, creators, applications,
 posts, tiers, reports, payments, the frozen ledger, the audit log and one-time
@@ -61,13 +61,20 @@ notes but cannot mark an invoice paid, edit an amount or delete settled history.
 
 ## Payments
 
-Bitcoin on-chain only, through the operator's own hosted BTCPay Server. There are
-no cards, no Lightning, no other assets and no simulated checkout: when BTCPay is
-not configured the API reports checkout as unavailable and says why.
+On-chain cryptocurrency and Tether, through the operator's own hosted BTCPay
+Server. Creators record a receiving address for each coin or token they accept and
+members pay in one of those. Supported: BTC, LTC, BCH, DOGE, XMR, ETH, BNB, TRX,
+SOL, XRP, USDT on Tron / Ethereum / BNB Smart Chain / Solana, and USDC on Ethereum
+(`server/wallets.py` is the catalog). There are no cards, no Lightning and no
+simulated checkout: when BTCPay is not configured the API reports checkout as
+unavailable and says why. A coin is offered only if the creator has a wallet for
+it, the operator allows it, **and** the BTCPay store has the matching payment
+method enabled.
 
 A 30-day membership is a single invoice. Access is granted only after a webhook
 whose HMAC signature verifies **and** an independent read of the same invoice
-confirms a settled on-chain payment matching the opaque order reference. A pending
+confirms a settled on-chain payment, in the coin the member chose, matching the
+opaque order reference. A pending
 invoice is not a paid membership and a browser redirect is not proof. Every settled
 invoice, ledger entry, webhook event and audit row is append-only in the schema
 itself. Velora does not automate payouts.
@@ -75,7 +82,7 @@ itself. Velora does not automate payouts.
 ## Tests
 
 ```bash
-python3 tests/run_tests.py      # 374 tests across 15 suites, with a summary table
+python3 tests/run_tests.py      # 432 tests across 17 suites, with a summary table
 ```
 
 `python3 tests/run_tests.py --list` shows the suites. Each test builds its own
@@ -89,7 +96,7 @@ captured real API responses (`web/tests/render.mjs`).
 
 ```
 server/            WSGI app: routing, security, migrations, services, routes, CLI
-  migrations/      11 additive SQL migrations (append-only triggers included)
+  migrations/      12 additive SQL migrations (append-only triggers included)
   services/        accounts, creators, posts, payments, social, admin
   routes/          one module per area; every route declares its auth policy
   tests/           server test suites + harness (fake BTCPay, outbox, helpers)

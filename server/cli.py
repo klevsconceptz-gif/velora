@@ -393,7 +393,7 @@ def cmd_serve(args) -> int:
         if not config.email_configured:
             print("  email delivery: NOT configured — verification email cannot be sent")
         if not config.btcpay_configured:
-            print("  BTC checkout  : NOT configured — checkout reports itself unavailable")
+            print("  crypto checkout: NOT configured — checkout reports itself unavailable")
         if printing:
             print("  database      :", config.db_path)
         try:

@@ -8,7 +8,7 @@ Architecture
 Design rules encoded here
 -------------------------
 * Production-sensitive settings are absent by default. With no BTCPay
-  configuration, BTC checkout reports itself unavailable; with no email
+  configuration, crypto checkout reports itself unavailable; with no email
   transport, verification mail cannot be sent. Missing configuration yields an
   explicit "unavailable" state, never a faked success.
 * No demo data, no seeded accounts, no default administrator credentials.

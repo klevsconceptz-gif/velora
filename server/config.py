@@ -13,6 +13,8 @@ import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .wallets import parse_asset_list, parse_method_overrides
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "var" / "velora.db"
 DEFAULT_MEDIA_ROOT = REPO_ROOT / "var" / "media"
@@ -126,6 +128,10 @@ class Config:
     btcpay_invoice_ttl_minutes: int
     btcpay_allow_localhost: bool
     rate_limits: dict[str, RateLimitRule] = field(default_factory=lambda: dict(DEFAULT_RATE_LIMITS))
+    # Which catalog assets this instance offers at checkout (None = the whole
+    # catalog) and any per-asset BTCPay payment-method id overrides.
+    payment_methods: tuple[str, ...] | None = None
+    payment_method_ids: dict[str, str] = field(default_factory=dict)
 
     # ---- feature availability -------------------------------------------------
     @property
@@ -143,6 +149,21 @@ class Config:
     @property
     def btcpay_configured(self) -> bool:
         return bool(self.btcpay_url and self.btcpay_store_id and self.btcpay_api_key)
+
+    @property
+    def offered_assets(self) -> tuple[str, ...]:
+        """Catalog asset keys the operator allows, in catalog order."""
+        from .wallets import ASSET_KEYS
+
+        if self.payment_methods is None:
+            return ASSET_KEYS
+        return tuple(key for key in ASSET_KEYS if key in self.payment_methods)
+
+    def method_id(self, asset_key: str) -> str:
+        """The BTCPay payment-method id used for an asset."""
+        from .wallets import ASSETS
+
+        return self.payment_method_ids.get(asset_key) or ASSETS[asset_key].method_id
 
     @property
     def btcpay_webhooks_configured(self) -> bool:
@@ -163,7 +184,7 @@ class Config:
             "btcpay_webhook_configured": self.btcpay_webhooks_configured,
             "platform_fee_percent": PLATFORM_FEE_PERCENT,
             "membership_period_days": MEMBERSHIP_PERIOD_DAYS,
-            "payment_methods": ["btc_onchain"] if self.btcpay_configured else [],
+            "payment_methods": list(self.offered_assets) if self.btcpay_configured else [],
             "max_upload_bytes": self.max_upload_bytes,
             "allowed_image_types": list(self.allowed_image_types),
             "framing": "restricted" if self.frame_ancestors == "'none'" else "permitted",
@@ -255,6 +276,8 @@ def build_config(environ: dict | None = None) -> Config:
         btcpay_webhook_secret=_env(environ, "VELORA_BTCPAY_WEBHOOK_SECRET") or None,
         btcpay_invoice_ttl_minutes=_env_int(environ, "VELORA_BTCPAY_INVOICE_TTL_MINUTES", 60),
         btcpay_allow_localhost=_env_bool(environ, "VELORA_BTCPAY_ALLOW_LOCALHOST", False),
+        payment_methods=parse_asset_list(_env(environ, "VELORA_PAYMENT_METHODS")),
+        payment_method_ids=parse_method_overrides(_env(environ, "VELORA_PAYMENT_METHOD_IDS")),
     )
 
 

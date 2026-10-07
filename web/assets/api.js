@@ -12,6 +12,7 @@ export const appState = {
   emailStatus: null,
   checkout: { available: false },
   categories: [],
+  paymentAssets: [],
   orientationOptions: null,
   reportReasons: [],
   creatorPage: null,
@@ -87,6 +88,7 @@ export async function loadBootstrap() {
   appState.emailStatus = payload.email_status;
   appState.checkout = payload.checkout;
   appState.categories = payload.categories || [];
+  appState.paymentAssets = payload.payment_assets || [];
   appState.orientationOptions = payload.orientation_options || null;
   appState.reportReasons = payload.report_reasons || [];
   appState.session = payload.session || { authenticated: false };

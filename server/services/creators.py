@@ -1,7 +1,8 @@
-"""Creator pages, applications, tiers, payout addresses and studio analytics."""
+"""Creator pages, applications, tiers, wallet addresses and studio analytics."""
 
 from __future__ import annotations
 
+import json
 import re
 
 from .. import audit
@@ -12,7 +13,6 @@ from ..serializers import (
     creator_application,
     creator_card,
     creator_page,
-    creator_payout,
     tier_public,
 )
 from ..validation import (
@@ -24,12 +24,12 @@ from ..validation import (
     MAX_TIER_DESCRIPTION,
     MAX_TIER_NAME,
     ValidationError,
-    clean_btc_address,
     clean_category,
     clean_handle,
     clean_text,
     price_to_cents,
 )
+from ..wallets import ASSETS, CATALOG, get_asset, validate_address
 from .accounts import Auth, require_active, require_admin, require_verified
 
 MIN_PITCH = 40
@@ -115,6 +115,7 @@ def apply_as_creator(ctx, auth: Auth, payload: dict) -> dict:
                            max_length=MAX_PITCH, label="Your pitch")
         desired = payload.get("desired_handle")
         handle = clean_handle(desired, field="desired_handle") if desired else None
+        wallets = clean_wallet_map(payload.get("wallets"))
     except ValidationError as exc:
         raise bad_request(exc.message, code="validation_error", field=exc.field) from None
 
@@ -132,14 +133,16 @@ def apply_as_creator(ctx, auth: Auth, payload: dict) -> dict:
         created = now_iso()
         application_id = conn.execute(
             """
-            INSERT INTO creator_applications (user_id, category, pitch, desired_handle, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?)
+            INSERT INTO creator_applications (user_id, category, pitch, desired_handle, status, created_at,
+                                              updated_at, wallets_json)
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
             """,
-            (auth.user_id, category, pitch, handle, created, created),
+            (auth.user_id, category, pitch, handle, created, created,
+             json.dumps(wallets, sort_keys=True) if wallets else None),
         ).lastrowid
         audit.record(conn, action="creator.application_submitted", actor_user_id=auth.user_id,
                      actor_role=auth.role, target_type="creator_application", target_id=application_id,
-                     meta={"category": category})
+                     meta={"category": category, "wallet_assets": sorted(wallets)})
         row = conn.execute("SELECT * FROM creator_applications WHERE id = ?", (application_id,)).fetchone()
     return creator_application(row)
 
@@ -227,7 +230,7 @@ def review_application(ctx, admin: Auth, application_id: int, payload: dict) -> 
             user = dict(user_row)
             existing_page = page_for_user(conn, user["id"])
             if existing_page is None:
-                create_page_for_user(
+                page_id = create_page_for_user(
                     conn,
                     user_id=user["id"],
                     handle=handle,
@@ -235,7 +238,12 @@ def review_application(ctx, admin: Auth, application_id: int, payload: dict) -> 
                     category=application["category"],
                 )
             else:
+                page_id = existing_page["id"]
                 handle = existing_page["handle"]
+            # Wallets entered with the application become the creator's wallets.
+            for asset_key, address in _application_wallets(application).items():
+                parsed = validate_address(asset_key, address)
+                _store_wallet(conn, page_id, asset_key, parsed, user["id"])
         audit.record(conn, action=f"admin.application_{status}", actor_user_id=admin.user_id,
                      actor_role="admin", target_type="creator_application", target_id=application_id,
                      meta={"handle": handle, "note_present": bool(note)})
@@ -402,52 +410,152 @@ def set_tier_active(ctx, auth: Auth, tier_id: int, active: bool) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Payout address
+# Wallet addresses
 # ---------------------------------------------------------------------------
 
+WALLET_NOTICE = (
+    "Each address is a receiving destination you control for that coin or token. Saving one only "
+    "records it — Velora does not send funds, split payments automatically, or verify wallet "
+    "ownership. Never enter a recovery phrase or private key."
+)
 
-def save_payout_address(ctx, auth: Auth, payload: dict) -> dict:
-    """Record an on-chain BTC receiving address for a creator.
 
-    Visible only to that creator and authorized admins. Saving an address records
-    a destination only: Velora does not verify wallet ownership, does not split
-    funds and does not send transfers.
+def clean_wallet_map(value) -> dict[str, str]:
+    """Validate an optional ``{asset: address}`` object (used when applying)."""
+    if value in (None, "", {}):
+        return {}
+    if not isinstance(value, dict):
+        raise ValidationError("Wallet addresses must be sent as a list of coin and address pairs.", "wallets")
+    if len(value) > len(CATALOG):
+        raise ValidationError("Too many wallet addresses.", "wallets")
+    cleaned: dict[str, str] = {}
+    for asset_key, address in value.items():
+        if address in (None, ""):
+            continue
+        if get_asset(asset_key) is None:
+            raise ValidationError("Choose a supported coin or token.", "wallets")
+        parsed = validate_address(asset_key, address, field=f"wallets.{asset_key}")
+        cleaned[asset_key] = parsed["address"]
+    return cleaned
+
+
+def _application_wallets(application: dict) -> dict[str, str]:
+    raw = application.get("wallets_json")
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        return {}
+    return {k: v for k, v in loaded.items() if k in ASSETS and isinstance(v, str)} if isinstance(loaded, dict) else {}
+
+
+def _store_wallet(conn, creator_id: int, asset_key: str, parsed: dict, user_id: int | None) -> None:
+    conn.execute(
+        """
+        INSERT INTO creator_wallets (creator_id, asset, address, address_kind, saved_at, saved_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(creator_id, asset) DO UPDATE SET
+          address = excluded.address,
+          address_kind = excluded.address_kind,
+          saved_at = excluded.saved_at,
+          saved_by = excluded.saved_by
+        """,
+        (creator_id, asset_key, parsed["address"], parsed["kind"], now_iso(), user_id),
+    )
+
+
+def wallets_for(conn, creator_id: int) -> list[dict]:
+    """The creator's wallets in catalog order."""
+    rows = conn.execute("SELECT * FROM creator_wallets WHERE creator_id = ?", (creator_id,)).fetchall()
+    by_asset = {row["asset"]: dict(row) for row in rows}
+    return [by_asset[asset.key] for asset in CATALOG if asset.key in by_asset]
+
+
+def wallet_for(conn, creator_id: int, asset_key: str):
+    return conn.execute("SELECT * FROM creator_wallets WHERE creator_id = ? AND asset = ?",
+                        (creator_id, asset_key)).fetchone()
+
+
+def wallets_view(creator_id: int, wallets: list[dict]) -> dict:
+    """Owner/admin view of a creator's wallets.
+
+    ``btc_address`` / ``address_kind`` / ``saved_at`` keep the original
+    single-address response shape working for older clients.
     """
+    items = []
+    for wallet in wallets:
+        asset = ASSETS.get(wallet["asset"])
+        if asset is None:
+            continue
+        items.append({
+            "asset": asset.public(),
+            "address": wallet["address"],
+            "address_kind": wallet["address_kind"],
+            "saved_at": wallet["saved_at"],
+        })
+    btc = next((w for w in wallets if w["asset"] == "btc"), None)
+    return {
+        "creator_id": creator_id,
+        "wallets": items,
+        "supported_assets": [asset.public() for asset in CATALOG],
+        "btc_address": btc["address"] if btc else None,
+        "address_kind": btc["address_kind"] if btc else None,
+        "saved_at": btc["saved_at"] if btc else None,
+        "notice": (
+            WALLET_NOTICE if items else
+            "No wallet address is on file. Add one for each coin or token you want to accept so members "
+            "can check out and the operator can review payouts. Velora never sends funds automatically."
+        ),
+    }
+
+
+def save_wallet(ctx, auth: Auth, asset_key, address, *, field: str = "address") -> dict:
+    """Record (or replace) the receiving address for one asset."""
     require_active(auth)
     require_verified(auth)
     ctx.gate("studio_write", auth.user_id)
     try:
-        parsed = clean_btc_address(payload.get("btc_address"))
+        parsed = validate_address(asset_key, address, field=field)
     except ValidationError as exc:
         raise bad_request(exc.message, code="validation_error", field=exc.field) from None
 
     with ctx.db.transaction() as conn:
         page = require_page(conn, auth)
-        conn.execute(
-            """
-            INSERT INTO creator_payouts (creator_id, btc_address, address_kind, saved_at, saved_by)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(creator_id) DO UPDATE SET
-              btc_address = excluded.btc_address,
-              address_kind = excluded.address_kind,
-              saved_at = excluded.saved_at,
-              saved_by = excluded.saved_by
-            """,
-            (page["id"], parsed["address"], parsed["kind"], now_iso(), auth.user_id),
-        )
-        audit.record(conn, action="creator.payout_address_saved", actor_user_id=auth.user_id,
+        _store_wallet(conn, page["id"], asset_key, parsed, auth.user_id)
+        audit.record(conn, action="creator.wallet_saved", actor_user_id=auth.user_id,
                      actor_role=auth.role, target_type="creator_page", target_id=page["id"],
-                     meta={"address_kind": parsed["kind"]})
-        row = conn.execute("SELECT * FROM creator_payouts WHERE creator_id = ?", (page["id"],)).fetchone()
-    return creator_payout(row)
+                     meta={"asset": asset_key, "address_kind": parsed["kind"]})
+        wallets = wallets_for(conn, page["id"])
+    return wallets_view(page["id"], wallets)
 
 
-def payout_for(conn, creator_id: int):
-    return conn.execute("SELECT * FROM creator_payouts WHERE creator_id = ?", (creator_id,)).fetchone()
+def remove_wallet(ctx, auth: Auth, asset_key) -> dict:
+    require_active(auth)
+    require_verified(auth)
+    ctx.gate("studio_write", auth.user_id)
+    if get_asset(asset_key) is None:
+        raise not_found("That coin or token is not supported.")
+    with ctx.db.transaction() as conn:
+        page = require_page(conn, auth)
+        removed = conn.execute("DELETE FROM creator_wallets WHERE creator_id = ? AND asset = ?",
+                               (page["id"], asset_key)).rowcount
+        if not removed:
+            raise not_found("No wallet is saved for that coin or token.")
+        audit.record(conn, action="creator.wallet_removed", actor_user_id=auth.user_id,
+                     actor_role=auth.role, target_type="creator_page", target_id=page["id"],
+                     meta={"asset": asset_key})
+        wallets = wallets_for(conn, page["id"])
+    return wallets_view(page["id"], wallets)
+
+
+def save_payout_address(ctx, auth: Auth, payload: dict) -> dict:
+    """Original single-address call: records the creator's Bitcoin wallet."""
+    return save_wallet(ctx, auth, "btc", payload.get("btc_address"), field="btc_address")
 
 
 def payout_for_actor(ctx, actor: Auth, creator_id: int) -> dict:
-    """Payout address read guarded by ownership or administrator role."""
+    """Wallet read guarded by ownership or administrator role."""
     with ctx.db.connection() as conn:
         page = conn.execute("SELECT * FROM creator_pages WHERE id = ?", (creator_id,)).fetchone()
         if page is None:
@@ -455,22 +563,11 @@ def payout_for_actor(ctx, actor: Auth, creator_id: int) -> dict:
         page = dict(page)
         if not actor.is_admin and page["user_id"] != actor.user_id:
             raise forbidden(
-                "Payout addresses are private to the creator and administrators.",
+                "Wallet addresses are private to the creator and administrators.",
                 code="payout_private",
             )
-        row = payout_for(conn, creator_id)
-    if row is None:
-        return {
-            "creator_id": creator_id,
-            "btc_address": None,
-            "address_kind": None,
-            "saved_at": None,
-            "notice": (
-                "No BTC receiving address is on file. Add one so payouts can be reviewed by the "
-                "operator. Velora never sends funds automatically."
-            ),
-        }
-    return creator_payout(row)
+        wallets = wallets_for(conn, creator_id)
+    return wallets_view(creator_id, wallets)
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +620,7 @@ def studio_overview(ctx, auth: Auth) -> dict:
             """,
             (page["id"],),
         ).fetchone()["c"]
-        payout_row = payout_for(conn, page["id"])
+        wallet_rows = wallets_for(conn, page["id"])
         recent_posts = [
             dict(row)
             for row in conn.execute(
@@ -555,16 +652,7 @@ def studio_overview(ctx, auth: Auth) -> dict:
         },
         "tiers": tiers_payload,
         "recent_posts": recent_posts,
-        "payout": creator_payout(payout_row) if payout_row else {
-            "creator_id": page["id"],
-            "btc_address": None,
-            "address_kind": None,
-            "saved_at": None,
-            "notice": (
-                "No BTC receiving address is on file. Add one so payouts can be reviewed by the "
-                "operator. Velora never sends funds automatically."
-            ),
-        },
+        "payout": wallets_view(page["id"], wallet_rows),
     }
 
 

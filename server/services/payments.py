@@ -1,13 +1,15 @@
-"""BTC-onchain membership payments (BTCPay Server) and memberships.
+"""On-chain crypto membership payments (BTCPay Server) and memberships.
 
 The settlement pipeline
 -----------------------
 1. ``create_intent`` writes a *pending* payment intent with an opaque order
-   reference and asks BTCPay for an on-chain BTC invoice for the USD price.
+   reference and asks BTCPay for an invoice for the USD price, restricted to the
+   one on-chain coin or token the member chose (and that the creator has a
+   wallet for).
 2. Access is granted only by :func:`grant_settlement`, which requires:
    a valid signed webhook **and** an independent ``GET /invoices/{id}`` from
-   BTCPay, both agreeing on a settled, on-chain, fully paid, in-window invoice
-   whose order reference matches the intent.
+   BTCPay, both agreeing on a settled, confirmed, fully paid, in-window invoice
+   paid with the chosen payment method, whose order reference matches the intent.
 3. A browser redirect is never evidence of payment. There is no code path that
    settles an invoice from a redirect, a query parameter, or a user request.
 4. Settled invoices and ledger rows are append-only (enforced by SQL triggers as
@@ -29,11 +31,12 @@ from ..btcpay import (
 )
 from ..config import MEMBERSHIP_PERIOD_DAYS, PLATFORM_FEE_PERCENT
 from ..db import future_iso, now_iso
+from ..wallets import ASSETS, get_asset
 from ..http import ApiError, bad_request, conflict, forbidden, not_found, unavailable
 from ..security import constant_time_equal, hmac_hex, opaque_reference, sha256_hex
 from ..serializers import INTENT_LABELS, invoice_public, membership_public, payment_intent_public, tier_public
 from .accounts import Auth, require_active, require_verified
-from .creators import payout_for, tier_by_id
+from .creators import tier_by_id, wallet_for, wallets_for
 
 TERMINAL_STATUSES = ("settled", "cancelled", "archived")
 
@@ -43,24 +46,30 @@ TERMINAL_STATUSES = ("settled", "cancelled", "archived")
 # ---------------------------------------------------------------------------
 
 
+METHOD_CACHE_SECONDS = 60
+
+
 def checkout_availability(ctx) -> dict:
-    """Explain, honestly, whether BTC checkout can be used right now."""
+    """Explain, honestly, whether crypto checkout can be used right now."""
     if ctx.config.btcpay_configured:
         return {
             "available": True,
-            "methods": ["btc_onchain"],
+            "methods": list(ctx.config.offered_assets),
+            "assets": [ASSETS[key].public() for key in ctx.config.offered_assets],
             "reason": None,
             "notice": (
-                "Memberships are paid in on-chain BTC through the configured hosted BTCPay Server "
-                "checkout. Each 30-day period is a separate payment and nothing renews automatically."
+                "Memberships are paid on-chain in a cryptocurrency or Tether token through the "
+                "configured hosted BTCPay Server checkout. Each 30-day period is a separate payment "
+                "and nothing renews automatically."
             ),
         }
     return {
         "available": False,
         "methods": [],
+        "assets": [],
         "reason": "btcpay_not_configured",
         "notice": (
-            "BTC checkout is unavailable on this instance because BTCPay Server is not configured. "
+            "Crypto checkout is unavailable on this instance because BTCPay Server is not configured. "
             "No payment can be started, and Velora will never report a purchase as successful while "
             "checkout is unavailable."
         ),
@@ -70,11 +79,54 @@ def checkout_availability(ctx) -> dict:
 def require_checkout_available(ctx) -> None:
     if not ctx.config.btcpay_configured:
         raise unavailable(
-            "BTC checkout is unavailable because this Velora instance has no BTCPay Server "
+            "Crypto checkout is unavailable because this Velora instance has no BTCPay Server "
             "configuration. Ask the operator to configure it before buying a membership. "
             "No payment has been started.",
             code="checkout_unavailable",
         )
+
+
+def store_payment_methods(ctx) -> set[str]:
+    """Payment-method ids enabled on the BTCPay store (cached for a minute).
+
+    Raises :class:`BtcPayError` when BTCPay cannot be asked, so callers fail
+    closed instead of offering coins the store may not accept.
+    """
+    cached = ctx.method_cache.get("store")
+    if cached and ctx.now() - cached[0] < METHOD_CACHE_SECONDS:
+        return cached[1]
+    methods = BtcPayClient.from_config(ctx.config).enabled_payment_methods()
+    ctx.method_cache["store"] = (ctx.now(), methods)
+    return methods
+
+
+def creator_methods(ctx, conn, creator_id: int) -> dict:
+    """Which coins a member can use for this creator, and why others cannot.
+
+    A coin is payable only when the creator has a wallet for it, the operator
+    offers it, and the BTCPay store has the matching payment method enabled.
+    """
+    wallets = {w["asset"]: w for w in wallets_for(conn, creator_id)}
+    enabled: set[str] | None = None
+    store_error = None
+    if wallets and ctx.config.btcpay_configured:
+        try:
+            enabled = store_payment_methods(ctx)
+        except BtcPayError as exc:
+            store_error = str(exc)
+    options = []
+    for key in wallets:
+        asset = ASSETS[key]
+        reason = None
+        if key not in ctx.config.offered_assets:
+            reason = "not_offered"
+        elif enabled is None:
+            reason = "store_unreachable" if store_error else "btcpay_not_configured"
+        elif ctx.config.method_id(key) not in enabled:
+            reason = "not_enabled_on_store"
+        options.append({**asset.public(), "available": reason is None, "unavailable_reason": reason,
+                        "payment_method": ctx.config.method_id(key)})
+    return {"options": options, "store_error": store_error, "has_wallets": bool(wallets)}
 
 
 def expire_memberships(ctx, conn=None) -> int:
@@ -229,7 +281,7 @@ def resume_membership(ctx, auth: Auth, membership_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def checkout_quote(ctx, auth: Auth, tier_id: int) -> dict:
+def checkout_quote(ctx, auth: Auth, tier_id: int, asset_key: str | None = None) -> dict:
     """Everything a member needs to see before a checkout is created."""
     require_active(auth)
     availability = checkout_availability(ctx)
@@ -244,7 +296,7 @@ def checkout_quote(ctx, auth: Auth, tier_id: int) -> dict:
         page = dict(page)
         owner = conn.execute("SELECT * FROM users WHERE id = ?", (page["user_id"],)).fetchone()
         existing = membership_for(conn, auth.user_id, page["id"])
-        payout = payout_for(conn, page["id"])
+        methods = creator_methods(ctx, conn, page["id"])
 
     blockers: list[dict] = []
     if not tier["is_active"] or tier["archived_at"]:
@@ -255,14 +307,37 @@ def checkout_quote(ctx, auth: Auth, tier_id: int) -> dict:
     if not availability["available"]:
         blockers.append({"code": availability["reason"] or "checkout_unavailable",
                          "message": availability["notice"]})
-    if payout is None:
+    usable = [m for m in methods["options"] if m["available"]]
+    if not methods["has_wallets"]:
         blockers.append({
             "code": "payout_address_required",
             "message": (
-                "This creator has not recorded a BTC receiving address yet, so the operator cannot "
+                "This creator has not recorded a wallet address yet, so the operator cannot "
                 "settle funds to them. Checkout stays closed until they add one."
             ),
         })
+    elif availability["available"] and not usable:
+        if methods["store_error"]:
+            blockers.append({
+                "code": "checkout_unavailable",
+                "message": "Velora could not reach BTCPay Server to confirm which coins it accepts. "
+                           "No payment has been started — please try again shortly.",
+            })
+        else:
+            blockers.append({
+                "code": "no_payment_method_available",
+                "message": "None of the coins this creator accepts can be paid through this Velora "
+                           "instance right now. No payment has been started.",
+            })
+    chosen = None
+    if asset_key is not None:
+        chosen = next((m for m in usable if m["key"] == asset_key), None)
+        if chosen is None and methods["has_wallets"] and not any(
+                b["code"] in ("no_payment_method_available", "checkout_unavailable") for b in blockers):
+            blockers.append({
+                "code": "asset_unavailable",
+                "message": "That coin cannot be used for this creator right now. Choose another.",
+            })
     if not auth.verified:
         blockers.append({"code": "email_verification_required",
                          "message": "Confirm your email address before buying a membership."})
@@ -278,6 +353,8 @@ def checkout_quote(ctx, auth: Auth, tier_id: int) -> dict:
         "period_days": MEMBERSHIP_PERIOD_DAYS,
         "can_checkout": not blockers,
         "blockers": blockers,
+        "payment_options": methods["options"],
+        "selected_asset": chosen["key"] if chosen else None,
         "availability": availability,
         "existing_membership": (
             {
@@ -287,14 +364,15 @@ def checkout_quote(ctx, auth: Auth, tier_id: int) -> dict:
             } if existing else None
         ),
         "renewal_notice": (
-            "This is a one-time on-chain BTC payment for a 30-day period. It does not auto-renew: "
+            "This is a one-time on-chain crypto payment for a 30-day period. It does not auto-renew: "
             "no charge is ever scheduled, and you choose each time whether to renew."
         ),
         "sequence": [
-            "Velora creates a pending order and asks BTCPay for an on-chain BTC invoice.",
-            "You pay the quoted BTC amount on-chain inside BTCPay's hosted checkout.",
+            "You choose a coin or token the creator accepts. Velora creates a pending order and asks "
+            "BTCPay for an on-chain invoice in that asset.",
+            "You pay the quoted amount on the chosen network inside BTCPay's hosted checkout.",
             "BTCPay sends a signed webhook and Velora independently re-checks the invoice.",
-            "Only a matching, settled, on-chain payment unlocks 30 days of access.",
+            "Only a matching, settled, on-chain payment in the chosen asset unlocks 30 days of access.",
         ],
     }
 
@@ -316,15 +394,32 @@ def create_intent(ctx, auth: Auth, payload: dict, request) -> dict:
     if not isinstance(tier_id, int):
         raise bad_request("Choose a tier to support.", code="validation_error", field="tier_id")
 
+    asset_key = payload.get("asset")
+    if asset_key is not None and not isinstance(asset_key, str):
+        raise bad_request("Choose how you want to pay.", code="validation_error", field="asset")
+    if asset_key is not None and get_asset(asset_key) is None:
+        raise bad_request("That coin or token is not supported.", code="validation_error", field="asset")
+
     quote = checkout_quote(ctx, auth, tier_id)
+    usable = [m for m in quote["payment_options"] if m["available"]]
+    if asset_key is None and len(usable) == 1:
+        asset_key = usable[0]["key"]
+    elif asset_key is None and len(usable) > 1:
+        raise bad_request("Choose which coin or token you want to pay with.",
+                          code="validation_error", field="asset")
+    if asset_key is not None:
+        quote = checkout_quote(ctx, auth, tier_id, asset_key)
     if not quote["can_checkout"]:
         blocker = quote["blockers"][0]
         code = blocker["code"]
-        status = 409 if code in ("tier_inactive", "page_unavailable", "payout_address_required") else 503
+        status = 409 if code in ("tier_inactive", "page_unavailable", "payout_address_required",
+                                 "no_payment_method_available", "asset_unavailable") else 503
         if code == "email_verification_required":
             raise forbidden(blocker["message"], code=code)
         raise ApiError(status, code, blocker["message"])
 
+    asset = ASSETS[asset_key]
+    method_id = ctx.config.method_id(asset_key)
     order_ref = opaque_reference("VLR")
     expires_at = future_iso(ctx.config.btcpay_invoice_ttl_minutes * 60)
     created = now_iso()
@@ -332,16 +427,17 @@ def create_intent(ctx, auth: Auth, payload: dict, request) -> dict:
         intent_id = conn.execute(
             """
             INSERT INTO payment_intents (order_ref, user_id, creator_id, tier_id, amount_cents, currency,
-                                         period_days, status, created_at, updated_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, 'USD', ?, 'pending', ?, ?, ?)
+                                         period_days, status, created_at, updated_at, expires_at,
+                                         asset, payment_method)
+            VALUES (?, ?, ?, ?, ?, 'USD', ?, 'pending', ?, ?, ?, ?, ?)
             """,
             (order_ref, auth.user_id, quote["creator"]["id"], tier_id, quote["amount_cents"],
-             MEMBERSHIP_PERIOD_DAYS, created, created, expires_at),
+             MEMBERSHIP_PERIOD_DAYS, created, created, expires_at, asset_key, method_id),
         ).lastrowid
         audit.record(conn, action="payment.intent_created", actor_user_id=auth.user_id, actor_role=auth.role,
                      target_type="payment_intent", target_id=intent_id,
                      meta={"order_ref": order_ref, "amount_cents": quote["amount_cents"],
-                           "creator_id": quote["creator"]["id"]})
+                           "creator_id": quote["creator"]["id"], "asset": asset_key})
 
     try:
         client = BtcPayClient.from_config(ctx.config)
@@ -353,10 +449,11 @@ def create_intent(ctx, auth: Auth, payload: dict, request) -> dict:
                              f"({MEMBERSHIP_PERIOD_DAYS} days)",
             redirect_url=redirect_url,
             ttl_minutes=ctx.config.btcpay_invoice_ttl_minutes,
+            payment_method=method_id,
         )
     except BtcPayNotConfigured:
         _fail_intent(ctx, intent_id, "BTCPay Server is not configured.")
-        raise unavailable("BTC checkout is unavailable on this instance.", code="checkout_unavailable") from None
+        raise unavailable("Crypto checkout is unavailable on this instance.", code="checkout_unavailable") from None
     except BtcPayError as exc:
         _fail_intent(ctx, intent_id, str(exc))
         raise unavailable(
@@ -365,7 +462,7 @@ def create_intent(ctx, auth: Auth, payload: dict, request) -> dict:
             code="checkout_unavailable",
         ) from None
 
-    normalized = normalize_invoice(raw)
+    normalized = normalize_invoice(raw, method_id, asset.decimals)
     if not normalized.invoice_id or not normalized.checkout_link:
         _fail_intent(ctx, intent_id, "BTCPay did not return a usable invoice.")
         raise unavailable("BTCPay returned an unusable invoice. No payment has been taken.",
@@ -379,11 +476,14 @@ def create_intent(ctx, auth: Auth, payload: dict, request) -> dict:
         conn.execute(
             """
             UPDATE payment_intents
-            SET btcpay_invoice_id = ?, checkout_url = ?, btc_invoice_sats = ?, btc_rate_usd = ?, updated_at = ?
+            SET btcpay_invoice_id = ?, checkout_url = ?, btc_invoice_sats = ?, asset_amount_atomic = ?,
+                btc_rate_usd = ?, updated_at = ?
             WHERE id = ? AND status = 'pending'
             """,
-            (normalized.invoice_id, normalized.checkout_link, normalized.due_sats, normalized.rate,
-             now_iso(), intent_id),
+            (normalized.invoice_id, normalized.checkout_link,
+             normalized.due_units if asset_key == "btc" else None,
+             str(normalized.due_units) if normalized.due_units is not None else None,
+             normalized.rate, now_iso(), intent_id),
         )
         row = conn.execute("SELECT * FROM payment_intents WHERE id = ?", (intent_id,)).fetchone()
     payload_out = payment_intent_public(row)
@@ -436,9 +536,11 @@ def verify_with_btcpay(ctx, intent: dict) -> tuple[NormalizedInvoice, Classifica
                           code="checkout_unavailable")
     if not intent.get("btcpay_invoice_id"):
         raise conflict("That order has no BTCPay invoice yet.", code="no_invoice")
+    asset = ASSETS.get(intent.get("asset") or "btc") or ASSETS["btc"]
+    method_id = intent.get("payment_method") or ctx.config.method_id(asset.key)
     client = BtcPayClient.from_config(ctx.config)
     raw = client.get_invoice(intent["btcpay_invoice_id"])
-    normalized = normalize_invoice(raw)
+    normalized = normalize_invoice(raw, method_id, asset.decimals)
     return normalized, classify_invoice(normalized, _Target(intent))
 
 
@@ -540,31 +642,38 @@ def grant_settlement(ctx, intent: dict, normalized: NormalizedInvoice, classific
         net_cents = amount_cents - fee_cents
         settled_at = now_iso()
 
-        payout = payout_for(conn, current["creator_id"])
-        payout_snapshot = dict(payout)["btc_address"] if payout else None
+        asset_key = current.get("asset") or "btc"
+        method_id = current.get("payment_method") or ASSETS[asset_key].method_id
+        wallet = wallet_for(conn, current["creator_id"], asset_key)
+        payout_snapshot = dict(wallet)["address"] if wallet else None
+        units = int(classification.units or normalized.settled_units or 0)
 
         invoice_row = conn.execute(
             """
             INSERT INTO invoices (payment_intent_id, order_ref, btcpay_invoice_id, user_id, creator_id, tier_id,
                                   amount_cents, platform_fee_cents, creator_net_cents, fee_percent,
                                   btc_amount_sats, btc_rate_usd, btc_destination, payout_address_snapshot,
-                                  status, settled_at, recorded_at, verify_source, invoice_digest)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'btcpay_btc_onchain', ?, 'settled', ?, ?, ?, ?)
+                                  status, settled_at, recorded_at, verify_source, invoice_digest,
+                                  asset, payment_method, asset_amount_atomic, payout_asset)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (current["id"], order_ref, invoice_id, current["user_id"], current["creator_id"],
              current["tier_id"], amount_cents, fee_cents, net_cents, PLATFORM_FEE_PERCENT,
-             int(classification.sats or normalized.onchain_settled_sats or 0), classification.rate
-             or normalized.rate, payout_snapshot, settled_at, settled_at, source,
-             sha256_hex(f"{invoice_id}:{order_ref}:{amount_cents}:{settled_at}".encode("utf-8"))),
+             units if asset_key == "btc" else 0, classification.rate or normalized.rate,
+             f"btcpay:{method_id}", payout_snapshot, settled_at, settled_at, source,
+             sha256_hex(f"{invoice_id}:{order_ref}:{amount_cents}:{settled_at}".encode("utf-8")),
+             asset_key, method_id, str(units), asset_key if wallet else None),
         ).lastrowid
 
         ledger_rows = [
             ("member_payment", "member_payment_received", "debit", amount_cents,
-             f"On-chain BTC membership payment for order {order_ref}"),
+             f"On-chain {ASSETS[asset_key].symbol} ({ASSETS[asset_key].network}) membership payment "
+             f"for order {order_ref}"),
             ("platform_fee", "platform_revenue", "credit", fee_cents,
              f"Velora platform fee ({PLATFORM_FEE_PERCENT}%), frozen at settlement"),
             ("creator_earning", "creator_payable", "credit", net_cents,
-             "Creator share, released to the creator's recorded BTC receiving address by the operator"),
+             f"Creator share, released by the operator to the creator's recorded "
+             f"{ASSETS[asset_key].symbol} ({ASSETS[asset_key].network}) wallet"),
         ]
         for entry_type, account, direction, amount, memo in ledger_rows:
             conn.execute(
@@ -579,12 +688,12 @@ def grant_settlement(ctx, intent: dict, normalized: NormalizedInvoice, classific
         conn.execute(
             """
             UPDATE payment_intents
-            SET status = 'settled', settled_at = ?, btc_invoice_sats = ?, btc_rate_usd = ?, hold_reason = NULL,
-                last_error = NULL, updated_at = ?
+            SET status = 'settled', settled_at = ?, btc_invoice_sats = ?, asset_amount_atomic = ?,
+                btc_rate_usd = ?, hold_reason = NULL, last_error = NULL, updated_at = ?
             WHERE id = ?
             """,
-            (settled_at, int(classification.sats or 0), classification.rate or normalized.rate, settled_at,
-             current["id"]),
+            (settled_at, units if asset_key == "btc" else None, str(units),
+             classification.rate or normalized.rate, settled_at, current["id"]),
         )
 
         membership = _extend_membership(conn, current, invoice_row)

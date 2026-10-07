@@ -16,12 +16,12 @@ def availability(request, ctx, auth, params):
     payload = payments_service.checkout_availability(ctx)
     payload.update(
         {
-            "methods": ["btc_onchain"] if ctx.config.btcpay_configured else [],
+            "methods": list(ctx.config.offered_assets) if ctx.config.btcpay_configured else [],
             "period_days": PLATFORM_FEE_PERIOD_DAYS,
             "platform_fee_percent": PLATFORM_FEE_PERCENT,
             "auto_renewal": False,
             "notices": [
-                "Bitcoin on-chain payments only. No cards, no Lightning, no other assets.",
+                "On-chain cryptocurrency and Tether payments through BTCPay only. No cards and no Lightning.",
                 "Each 30-day period is a separate payment. Velora never schedules an automatic charge.",
                 "A browser redirect is not proof of payment: access follows a verified settled invoice.",
             ],
@@ -35,7 +35,7 @@ def quote(request, ctx, auth, params):
     tier_id = request.query_int("tier_id", None)
     if not tier_id:
         raise bad_request("Choose a tier to see the price.", code="validation_error", field="tier_id")
-    return ok(payments_service.checkout_quote(ctx, auth, tier_id))
+    return ok(payments_service.checkout_quote(ctx, auth, tier_id, request.query_one("asset") or None))
 
 
 @route("POST", "/api/payments/intents", auth=AUTH_REQUIRED)

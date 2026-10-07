@@ -10,7 +10,7 @@ must be true before it should take anyone's money.
 | Capability | Configured by | If missing |
 | --- | --- | --- |
 | Email (confirm address, invitations) | `VELORA_EMAIL_TRANSPORT=smtp` + SMTP settings | Signup still works; the API says delivery is unavailable and tells the operator what to do. Protected actions report `email_verification_required`. |
-| Bitcoin checkout | `VELORA_BTCPAY_*` | Checkout is disabled everywhere with a plain explanation (`checkout_unavailable`). Nothing is simulated. |
+| Crypto checkout | `VELORA_BTCPAY_*` | Checkout is disabled everywhere with a plain explanation (`checkout_unavailable`). Nothing is simulated. |
 | Taking customer funds | Your own review | See [Before you take money](#before-you-take-money). |
 
 ---
@@ -153,6 +153,8 @@ either way.
 | `VELORA_BTCPAY_API_KEY` | — | Key with invoice-create/read permission. **Never** in frontend code or git. |
 | `VELORA_BTCPAY_WEBHOOK_SECRET` | — | Shared secret for the webhook HMAC. Without it every delivery is refused and recorded. |
 | `VELORA_BTCPAY_INVOICE_TTL_MINUTES` | 60 | Hosted-invoice expiry. |
+| `VELORA_PAYMENT_METHODS` | all | Comma-separated catalog keys offered at checkout. |
+| `VELORA_PAYMENT_METHOD_IDS` | — | `key=BTCPAY-METHOD-ID` overrides for the default payment-method ids. |
 | `VELORA_BTCPAY_ALLOW_LOCALHOST` | `0` | Escape hatch for a BTCPay instance on your own machine. Production code otherwise refuses localhost/private URLs. |
 | `VELORA_FRAME_ANCESTORS` | dev `*`, prod `'none'` | CSP `frame-ancestors` value. |
 
@@ -161,7 +163,7 @@ in the repository, the frontend bundle, a log line or a test fixture.
 
 ---
 
-## 5. Bitcoin payments (BTCPay Server)
+## 5. Crypto payments (BTCPay Server)
 
 1. In your BTCPay Server, create (or choose) a store that will receive 30-day
    memberships. Note its **store id**.
@@ -170,10 +172,35 @@ in the repository, the frontend bundle, a log line or a test fixture.
    for the `InvoiceSettled` family of events, and copy its **secret**.
 4. Set `VELORA_BTCPAY_URL`, `VELORA_BTCPAY_STORE_ID`, `VELORA_BTCPAY_API_KEY` and
    `VELORA_BTCPAY_WEBHOOK_SECRET`, then restart.
+5. Enable the coins and tokens you want to accept as **on-chain payment methods**
+   on that store (Bitcoin-family coins such as BTC, LTC, BCH and DOGE are built in; Ethereum,
+   Tron, Solana, XRP, Monero and Tether tokens depend on the BTCPay plugins you
+   install). Give the API key
+   permission to read store settings so Velora can see which methods are enabled.
+
+Which coins members can pay with is the intersection of three things, checked each
+time a quote is built (the store's list is cached for 60 seconds):
+
+1. the creator has recorded a wallet address for the coin,
+2. the operator offers it — `VELORA_PAYMENT_METHODS` (comma-separated catalog keys,
+   default: the whole catalog), and
+3. the BTCPay store has the matching payment method enabled.
+
+If BTCPay cannot be asked, no coin is offered (fail closed) and no order is
+created. Velora requests each invoice restricted to the single chosen method;
+Lightning is never requested.
+
+BTCPay payment-method ids differ by plugin and version. Velora's defaults
+(`BTC-CHAIN`, `LTC-CHAIN`, `ETH-CHAIN`, `USDT_TRC20-CHAIN`, …) are in
+`server/wallets.py`. **Check the ids your store reports** under
+`GET /api/v1/stores/<id>/payment-methods` and override any that differ with
+`VELORA_PAYMENT_METHOD_IDS`, e.g. `usdt_trc20=USDT-TRON,eth=ETH-CHAIN`.
+Catalog keys: `btc ltc bch doge xmr eth bnb trx sol xrp usdt_trc20 usdt_erc20
+usdt_bep20 usdt_sol usdc_erc20`.
 
 How the money path behaves, by design:
 
-* Prices are integer USD cents; BTCPay quotes the BTC amount for the 30-day period.
+* Prices are integer USD cents; BTCPay quotes the amount in the member's chosen coin for the 30-day period.
   Each period is a separate invoice — nothing is scheduled, nothing auto-charges.
 * The 10% platform fee is computed when the invoice is created and frozen into the
   settled record.
@@ -186,9 +213,15 @@ How the money path behaves, by design:
 * Settled invoices, ledger entries, webhook events and audit rows are append-only
   at the database level. Administrators can add notes; they cannot mark an invoice
   paid, edit an amount or delete history.
-* Creators record an on-chain BTC address that only they and administrators can
-  read. Saving it records a destination — Velora does not split funds, automate
-  payouts or verify wallet ownership. Payouts are a manual operator process.
+* Creators record one receiving address per coin or token they accept (also
+  possible while applying). Only they and administrators can read them. Addresses
+  are checked for format and checksum on the right network (an Ethereum address is
+  refused for Tron, and so on) and seed phrases / private keys are refused. Saving
+  one records a destination — Velora does not split funds, automate payouts or
+  verify wallet ownership. Payouts are a manual operator process. The wallet
+  that applied at settlement is snapshotted on the settled invoice.
+* A payment made in a different coin than the one chosen, or only partly in it, is
+  held for review like any other mismatch.
 
 Until each of those is configured and tested, `/api/payments/availability` reports
 checkout as unavailable and the studio shows the creator why.

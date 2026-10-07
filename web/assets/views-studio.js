@@ -1,4 +1,4 @@
-/** Creator studio: overview, posts, tiers, members and the payout address. */
+/** Creator studio: overview, posts, tiers, members and wallet addresses. */
 
 import { ApiFailure, api, appState, currentUser, isSignedIn, uploadMedia } from './api.js';
 import * as ui from './ui.js';
@@ -23,7 +23,7 @@ function studioTabs(active) {
     ['Posts', '/studio/posts', 'posts'],
     ['Tiers', '/studio/tiers', 'tiers'],
     ['Members', '/studio/members', 'members'],
-    ['Payout address', '/studio/payout', 'payout'],
+    ['Wallets', '/studio/payout', 'payout'],
   ];
   return el('nav', { class: 'tabs', 'aria-label': 'Studio sections' },
     tabs.map(([label, href, key]) => el('a', {
@@ -58,6 +58,11 @@ export async function studioPage(params, query, context) {
     studioTabs('overview'),
   );
   verificationGate(session.user, container);
+  if (!overview.payout.wallets.length) {
+    container.append(notice('warning', 'Add a wallet address to start earning',
+      'Members can only check out in the coins you have an address for. Add at least one — Bitcoin, Ethereum, Tether (USDT) and others are supported.',
+      el('div', { class: 'button-row' }, el('a', { class: 'button button--primary button--small', href: '#/studio/payout', text: 'Add wallet addresses' }))));
+  }
 
   container.append(el('section', { 'aria-label': 'Key numbers' },
     el('div', { class: 'hero__stats' },
@@ -80,7 +85,7 @@ export async function studioPage(params, query, context) {
       ),
       el('p', { class: 'subtle', text: 'Settled records are append-only. Held or pending payments never appear here as income.' }),
       el('div', { class: 'button-row' },
-        el('a', { class: 'button button--ghost button--small', href: '#/studio/payout', text: 'Payout address' }),
+        el('a', { class: 'button button--ghost button--small', href: '#/studio/payout', text: 'Wallet addresses' }),
         el('a', { class: 'button button--ghost button--small', href: `#/c/${overview.page.handle}`, text: 'View public page' }),
       ),
     ),
@@ -465,7 +470,7 @@ export async function tiersPage(params, query, context) {
   const container = el('div', { class: 'stack-lg' },
     el('header', {},
       el('h1', { text: 'Membership tiers' }),
-      el('p', { class: 'lede', text: 'Prices are stored in whole cents in US dollars; BTCPay quotes the BTC amount at checkout. Each tier buys a 30-day period.' }),
+      el('p', { class: 'lede', text: 'Prices are stored in whole cents in US dollars; BTCPay quotes the amount in the member’s chosen coin at checkout. Each tier buys a 30-day period.' }),
     ),
     studioTabs('tiers'),
   );
@@ -618,55 +623,90 @@ export async function membersPage(params, query, context) {
   return container;
 }
 
-// ---------------------------------------------------------------- payout
+// ---------------------------------------------------------------- wallets
 
 export async function payoutPage(params, query, context) {
   if (!requireStudio(context, appState.creatorPage)) return el('div');
-  const payload = await api('/api/studio/payout');
+  const payload = await api('/api/studio/wallets');
   const payout = payload.payout;
+  const saved = new Map(payout.wallets.map((wallet) => [wallet.asset.key, wallet]));
   const container = el('div', { class: 'stack-lg' },
     el('header', {},
-      el('h1', { text: 'BTC receiving address' }),
-      el('p', { class: 'lede', text: 'Where you want the operator to send your share. Saving it records a destination and nothing more.' }),
+      el('h1', { text: 'Wallet addresses' }),
+      el('p', { class: 'lede', text: 'Add a receiving address for each coin or token you want to accept — Bitcoin, Ethereum, Tether (USDT) and more. Members can only pay you in the coins you add here.' }),
     ),
     studioTabs('payout'),
     notice('warning', 'Read this before saving',
-      'Velora does not verify that you control this address, does not split funds and does not send transfers. The operator reviews payouts manually. Never paste a seed phrase or a private key here — Velora will never ask for one.'),
+      'Velora does not verify that you control an address, does not split funds and does not send transfers. The operator reviews payouts manually. Use an address on exactly the network shown — the same token sent over another network can be lost. Never paste a seed phrase or a private key here; Velora will never ask for one.'),
   );
 
-  if (payout.btc_address) {
-    container.append(el('section', { class: 'card' },
-      el('h2', { text: 'Address on file' }),
-      el('p', { class: 'mono', text: payout.btc_address }),
-      el('p', { class: 'subtle', text: `Type detected: ${payout.address_kind} · saved ${ui.formatDateTime(payout.saved_at)}` }),
-      el('p', { class: 'muted', text: 'Visible only to you and authorized administrators.' }),
-    ));
-  } else {
-    container.append(el('section', { class: 'card' }, el('h2', { text: 'No address yet' }), el('p', { class: 'muted', text: payout.notice })));
-  }
+  container.append(el('section', { class: 'card' },
+    el('h2', { text: saved.size ? `${saved.size} wallet${saved.size === 1 ? '' : 's'} on file` : 'No wallets yet' }),
+    el('p', { class: 'muted', text: saved.size ? 'Visible only to you and authorized administrators.' : payout.notice }),
+  ));
 
-  const address = ui.field({
-    id: 'payout-address', label: 'On-chain BTC receiving address', value: payout.btc_address || '',
-    hint: 'Mainnet addresses beginning with 1, 3 or bc1. Velora checks the format only.',
+  const groups = [
+    ['Tether and stablecoins', payout.supported_assets.filter((asset) => asset.stablecoin)],
+    ['Coins', payout.supported_assets.filter((asset) => !asset.stablecoin)],
+  ];
+  groups.forEach(([title, assets]) => {
+    const section = el('section', { class: 'stack' }, el('h2', { text: title }));
+    assets.forEach((asset) => section.append(walletCard(asset, saved.get(asset.key), context)));
+    container.append(section);
   });
+  return container;
+}
+
+function walletCard(asset, wallet, context) {
+  const input = ui.field({
+    id: `wallet-${asset.key}`,
+    label: `${asset.label} receiving address`,
+    value: wallet ? wallet.address : '',
+    hint: [`Example: ${asset.example}`, asset.warning].filter(Boolean).join(' '),
+  });
+  input.control.setAttribute('autocomplete', 'off');
+  input.control.setAttribute('spellcheck', 'false');
   const error = el('div', { role: 'alert' });
-  const form = el('form', { class: 'form', novalidate: true }, error, address.wrapper,
-    el('div', { class: 'button-row' }, ui.submitButton('Save address')));
+  const save = ui.submitButton(wallet ? 'Replace address' : 'Save address');
+  const buttons = el('div', { class: 'button-row' }, save);
+  if (wallet) {
+    buttons.append(el('button', {
+      class: 'button button--ghost', type: 'button', text: 'Remove',
+      'aria-label': `Remove ${asset.label} address`,
+      onclick: async (event) => {
+        const button = event.currentTarget;
+        ui.setBusy(button, true, 'Removing…');
+        try {
+          await api(`/api/studio/wallets/${encodeURIComponent(asset.key)}`, { method: 'DELETE' });
+          ui.toast(`${asset.label} address removed. Members can no longer pay you in it.`, 'success');
+          context.reload();
+        } catch (failure) {
+          clear(error).append(notice('danger', 'Address not removed', failure.message));
+          ui.setBusy(button, false);
+        }
+      },
+    }));
+  }
+  const form = el('form', { class: 'form', novalidate: true }, error, input.wrapper, buttons);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     clear(error);
-    const button = form.querySelector('button[type="submit"]');
-    ui.setBusy(button, true, 'Saving…');
+    ui.setBusy(save, true, 'Saving…');
     try {
-      await api('/api/studio/payout', { method: 'PUT', body: { btc_address: address.control.value.trim() } });
-      ui.toast('Receiving address saved.', 'success');
+      await api(`/api/studio/wallets/${encodeURIComponent(asset.key)}`, {
+        method: 'PUT', body: { address: input.control.value.trim() },
+      });
+      ui.toast(`${asset.label} address saved.`, 'success');
       context.reload();
     } catch (failure) {
       error.append(notice('danger', 'Address not saved', failure.message));
     } finally {
-      ui.setBusy(button, false);
+      ui.setBusy(save, false);
     }
   });
-  container.append(el('section', { class: 'card' }, form));
-  return container;
+  return el('div', { class: 'card', dataset: { asset: asset.key } },
+    el('h3', { text: asset.label }),
+    wallet ? el('p', { class: 'subtle', text: `On file · saved ${ui.formatDateTime(wallet.saved_at)}` }) : null,
+    form,
+  );
 }

@@ -10,6 +10,7 @@ from __future__ import annotations
 from ..db import now_iso
 from ..http import bad_request, json_response
 from ..routing import AUTH_ADMIN, route
+from ..serializers import creator_application
 from ..services import accounts as accounts_service
 from ..services import admin as admin_service
 from ..services import creators as creators_service
@@ -151,7 +152,8 @@ def applications(request, ctx, auth, params):
         {
             "items": [
                 {
-                    **{k: row[k] for k in row.keys() if k not in ("email",)},
+                    **{k: row[k] for k in row.keys() if k not in ("email", "wallets_json")},
+                    "wallet_assets": creator_application(row)["wallet_assets"],
                     "applicant_email": row["email"],
                     "applicant_status": row["user_status"],
                 }

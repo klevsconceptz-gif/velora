@@ -16,6 +16,7 @@ another member; only the account owner and authorized admins see them.
 from __future__ import annotations
 
 from .validation import ORIENTATION_PREFER_NOT_TO_SAY, orientation_public_eligible
+from .wallets import ASSETS, format_atomic
 
 # ---------------------------------------------------------------------------
 # Users
@@ -166,20 +167,16 @@ def tier_public(row) -> dict:
     }
 
 
-def creator_payout(row) -> dict:
-    """Payout destination view for the owner and authorized admins only."""
-    payout = dict(row)
-    return {
-        "creator_id": payout["creator_id"],
-        "btc_address": payout["btc_address"],
-        "address_kind": payout["address_kind"],
-        "saved_at": payout["saved_at"],
-        "notice": (
-            "This is an on-chain BTC receiving address you control. Saving it only records a "
-            "destination — Velora does not send funds, split payments automatically, or verify "
-            "wallet ownership."
-        ),
-    }
+def _application_wallet_assets(application: dict) -> list[str]:
+    """Which coins an applicant entered wallets for (never the addresses)."""
+    import json
+
+    raw = application.get("wallets_json")
+    try:
+        loaded = json.loads(raw) if raw else {}
+    except ValueError:
+        loaded = {}
+    return [key for key in ASSETS if isinstance(loaded, dict) and key in loaded]
 
 
 def creator_application(row) -> dict:
@@ -193,6 +190,7 @@ def creator_application(row) -> dict:
         "status": application["status"],
         "decision_note": application.get("decision_note"),
         "reviewed_at": application.get("reviewed_at"),
+        "wallet_assets": _application_wallet_assets(application),
         "created_at": application["created_at"],
         "updated_at": application["updated_at"],
     }
@@ -317,6 +315,27 @@ INTENT_LABELS = {
 }
 
 
+def asset_fields(record: dict, legacy_units) -> dict:
+    """The chosen coin/token and the exact amount BTCPay quoted for it."""
+    asset = ASSETS.get(record.get("asset") or "btc") or ASSETS["btc"]
+    atomic = record.get("asset_amount_atomic")
+    if atomic in (None, "") and asset.key == "btc" and legacy_units:
+        atomic = str(legacy_units)
+    return {
+        "asset": asset.key,
+        "asset_symbol": asset.symbol,
+        "asset_label": asset.label,
+        "network": asset.network,
+        "payment_method": record.get("payment_method") or asset.method_id,
+        "asset_amount": format_atomic(atomic, asset.decimals) if atomic not in (None, "") else None,
+        "asset_amount_atomic": str(atomic) if atomic not in (None, "") else None,
+        "rate_usd": record.get("btc_rate_usd"),
+        # Original Bitcoin-only fields, kept for older clients; null for other assets.
+        "btc_amount_sats": (int(legacy_units) if legacy_units is not None else None)
+        if asset.key == "btc" else None,
+    }
+
+
 def payment_intent_public(row) -> dict:
     intent = dict(row)
     status = intent["status"]
@@ -334,8 +353,8 @@ def payment_intent_public(row) -> dict:
         "paid": status == "settled",
         "access_granted": status == "settled",
         "hold_reason": intent.get("hold_reason"),
-        "btc_amount_sats": intent.get("btc_invoice_sats"),
-        "btc_rate_usd": intent.get("btc_rate_usd"),
+        **asset_fields(intent, intent.get("btc_invoice_sats")),
+        "btc_rate_usd": intent.get("btc_rate_usd") if (intent.get("asset") or "btc") == "btc" else None,
         "checkout_url": intent.get("checkout_url") if status in ("pending", "processing") else None,
         "created_at": intent["created_at"],
         "updated_at": intent["updated_at"],
@@ -343,7 +362,7 @@ def payment_intent_public(row) -> dict:
         "settled_at": intent.get("settled_at"),
         "notice": (
             "A pending invoice is not a paid membership. Access is granted only after BTCPay "
-            "reports the on-chain BTC invoice settled and Velora verifies it independently."
+            "reports the on-chain invoice settled and Velora verifies it independently."
         ),
     }
     return payload
@@ -361,8 +380,8 @@ def invoice_public(row) -> dict:
         "platform_fee_cents": invoice["platform_fee_cents"],
         "creator_net_cents": invoice["creator_net_cents"],
         "fee_percent": invoice["fee_percent"],
-        "btc_amount_sats": invoice["btc_amount_sats"],
-        "btc_rate_usd": invoice.get("btc_rate_usd"),
+        **asset_fields(invoice, invoice["btc_amount_sats"]),
+        "btc_rate_usd": invoice.get("btc_rate_usd") if (invoice.get("asset") or "btc") == "btc" else None,
         "status": invoice["status"],
         "settled_at": invoice["settled_at"],
         "recorded_at": invoice["recorded_at"],

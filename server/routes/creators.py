@@ -177,7 +177,26 @@ def get_payout(request, ctx, auth, params):
 
 @route("PUT", "/api/studio/payout", auth=AUTH_REQUIRED)
 def save_payout(request, ctx, auth, params):
+    """Original single-address call; records the creator's Bitcoin wallet."""
     return ok({"payout": creators_service.save_payout_address(ctx, auth, request.json())})
+
+
+@route("GET", "/api/studio/wallets", auth=AUTH_REQUIRED)
+def list_wallets(request, ctx, auth, params):
+    with ctx.db.connection() as conn:
+        page = creators_service.require_page(conn, auth)
+    return ok({"payout": creators_service.payout_for_actor(ctx, auth, page["id"])})
+
+
+@route("PUT", "/api/studio/wallets/<str:asset>", auth=AUTH_REQUIRED)
+def save_wallet(request, ctx, auth, params):
+    body = request.json()
+    return ok({"payout": creators_service.save_wallet(ctx, auth, params["asset"], body.get("address"))})
+
+
+@route("DELETE", "/api/studio/wallets/<str:asset>", auth=AUTH_REQUIRED)
+def remove_wallet(request, ctx, auth, params):
+    return ok({"payout": creators_service.remove_wallet(ctx, auth, params["asset"])})
 
 
 @route("GET", "/api/studio/media/<int:media_id>", auth=AUTH_REQUIRED)

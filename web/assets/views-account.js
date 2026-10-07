@@ -398,7 +398,22 @@ export async function applyPage(params, query, context) {
   const pitch = ui.field({ id: 'apply-pitch', label: 'What will members get?', type: 'textarea', required: true, hint: 'At least 40 characters. This goes to the operator reviewing your application.' });
   const error = el('div', { role: 'alert' });
   const submit = ui.submitButton('Submit application');
-  const form = el('form', { class: 'form', novalidate: true }, error, category.wrapper, handle.wrapper, pitch.wrapper, el('div', { class: 'button-row' }, submit));
+  const walletInputs = new Map();
+  const walletSection = el('fieldset', { class: 'stack' },
+    el('legend', { text: 'Wallet addresses (optional now, needed before members can pay you)' }),
+    el('p', { class: 'subtle', text: 'Add a receiving address for each coin or token you want to accept. Use the exact network shown. You can add or change these any time in the studio. Never enter a seed phrase or private key.' }),
+  );
+  (appState.paymentAssets || []).forEach((asset) => {
+    const input = ui.field({
+      id: `apply-wallet-${asset.key}`, label: `${asset.label} address`,
+      hint: [`Example: ${asset.example}`, asset.warning].filter(Boolean).join(' '),
+    });
+    input.control.setAttribute('autocomplete', 'off');
+    input.control.setAttribute('spellcheck', 'false');
+    walletInputs.set(asset.key, input.control);
+    walletSection.append(input.wrapper);
+  });
+  const form = el('form', { class: 'form', novalidate: true }, error, category.wrapper, handle.wrapper, pitch.wrapper, walletSection, el('div', { class: 'button-row' }, submit));
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -411,6 +426,9 @@ export async function applyPage(params, query, context) {
           category: select.value,
           desired_handle: handle.control.value.trim() || null,
           pitch: pitch.control.value.trim(),
+          wallets: Object.fromEntries([...walletInputs.entries()]
+            .map(([key, control]) => [key, control.value.trim()])
+            .filter(([, value]) => value)),
         },
       });
       clear(error).append(notice('success', `Application ${created.status}`,
@@ -429,8 +447,8 @@ export async function applyPage(params, query, context) {
     el('aside', { class: 'card card--quiet' },
       el('h2', { text: 'How payouts work' }),
       el('ul', {},
-        el('li', { text: 'Members pay on-chain BTC through BTCPay Server into the operator’s store.' }),
-        el('li', { text: 'You record a BTC receiving address; the operator reviews payouts manually.' }),
+        el('li', { text: 'Members pay on-chain in a coin or Tether token you accept, through BTCPay Server, into the operator’s store.' }),
+        el('li', { text: 'You record a receiving address for each coin you accept; the operator reviews payouts manually.' }),
         el('li', { text: 'Velora never sends funds automatically and never holds your keys.' }),
       ),
     ),
@@ -871,10 +889,10 @@ export async function membershipsPage(params, query, context) {
 
   const history = el('section', { class: 'card' },
     el('h2', { text: 'Payment status' }),
-    el('p', { class: 'muted', text: 'A pending invoice is not a paid membership: access only follows a verified, settled on-chain BTC payment.' }),
+    el('p', { class: 'muted', text: 'A pending invoice is not a paid membership: access only follows a verified, settled on-chain payment.' }),
   );
   if (payments.unavailable_notice) {
-    history.append(notice('warning', 'BTC checkout is unavailable', payments.unavailable_notice));
+    history.append(notice('warning', 'Crypto checkout is unavailable', payments.unavailable_notice));
   }
   if (!payments.intents.length) {
     history.append(el('p', { class: 'subtle', text: 'No payment attempts yet.' }));
@@ -883,13 +901,15 @@ export async function membershipsPage(params, query, context) {
       el('caption', { text: 'Every order and its real status' }),
       el('thead', {}, el('tr', {},
         el('th', { scope: 'col', text: 'Order' }), el('th', { scope: 'col', text: 'Creator' }),
-        el('th', { scope: 'col', text: 'Amount' }), el('th', { scope: 'col', text: 'Status' }),
+        el('th', { scope: 'col', text: 'Amount' }), el('th', { scope: 'col', text: 'Pay with' }),
+        el('th', { scope: 'col', text: 'Status' }),
         el('th', { scope: 'col', text: 'Created' }), el('th', { scope: 'col', text: '' }),
       )),
       el('tbody', {}, payments.intents.map((intent) => el('tr', {},
         el('td', { class: 'mono', text: intent.order_ref }),
         el('td', { text: intent.creator.page_name }),
         el('td', { text: money(intent.amount_cents) }),
+        el('td', { text: ui.assetName(intent) }),
         el('td', {}, badge(intent.status_label, intent.status)),
         el('td', { text: ui.formatDate(intent.created_at) }),
         el('td', {}, el('a', { href: `#/checkout/${intent.order_ref}`, text: 'Open' })),
@@ -906,12 +926,12 @@ export async function membershipsPage(params, query, context) {
       el('div', { class: 'table-wrap' }, el('table', {},
         el('thead', {}, el('tr', {},
           el('th', { scope: 'col', text: 'Order' }), el('th', { scope: 'col', text: 'Amount' }),
-          el('th', { scope: 'col', text: 'BTC' }), el('th', { scope: 'col', text: 'Settled' }),
+          el('th', { scope: 'col', text: 'Paid in' }), el('th', { scope: 'col', text: 'Settled' }),
         )),
         el('tbody', {}, payments.invoices.map((invoice) => el('tr', {},
           el('td', { class: 'mono', text: invoice.order_ref }),
           el('td', { text: money(invoice.amount_cents) }),
-          el('td', { text: ui.sats(invoice.btc_amount_sats) }),
+          el('td', { text: `${ui.assetAmount(invoice)} · ${ui.assetName(invoice)}` }),
           el('td', { text: ui.formatDateTime(invoice.settled_at) }),
         ))),
       )),
@@ -1110,7 +1130,7 @@ async function startCheckoutPage(tierId, context) {
   const container = el('div', { class: 'stack-lg' },
     el('header', {},
       el('h1', { text: 'Review your membership' }),
-      el('p', { class: 'lede', text: `One on-chain BTC payment for 30 days of access to ${quote.creator.page_name}. Nothing renews automatically.` }),
+      el('p', { class: 'lede', text: `One on-chain crypto payment for 30 days of access to ${quote.creator.page_name}. Nothing renews automatically.` }),
     ),
   );
 
@@ -1121,7 +1141,7 @@ async function startCheckoutPage(tierId, context) {
       el('dt', { text: 'Price' }), el('dd', { text: `${money(quote.amount_cents)} per 30 days` }),
       el('dt', { text: 'Platform fee (frozen at settlement)' }), el('dd', { text: `${money(quote.platform_fee_cents)} (${quote.fee_percent}%)` }),
       el('dt', { text: 'Creator share' }), el('dd', { text: money(quote.creator_net_cents) }),
-      el('dt', { text: 'Payment method' }), el('dd', { text: 'Bitcoin on-chain only — no cards, no Lightning' }),
+      el('dt', { text: 'Payment method' }), el('dd', { text: 'On-chain crypto or Tether, paid through BTCPay — no cards, no Lightning' }),
     ),
     quote.existing_membership && quote.existing_membership.status === 'active'
       ? notice('info', 'You already have access', `Renewing adds 30 days from ${ui.formatDateTime(quote.existing_membership.ends_at)} instead of replacing the time you have.`)
@@ -1138,6 +1158,28 @@ async function startCheckoutPage(tierId, context) {
     return container;
   }
 
+  const choices = quote.payment_options.filter((option) => option.available);
+  let chosen = choices.length === 1 ? choices[0].key : null;
+  const picker = el('fieldset', { class: 'card stack' },
+    el('legend', { text: 'Pay with' }),
+    el('p', { class: 'muted', text: 'Choose a coin or token this creator accepts. The exact amount is quoted by BTCPay at checkout. Send only the asset and network shown.' }),
+  );
+  choices.forEach((option) => {
+    const id = `pay-${option.key}`;
+    const radio = el('input', { type: 'radio', name: 'pay-asset', id, value: option.key });
+    if (chosen === option.key) radio.checked = true;
+    radio.addEventListener('change', () => { chosen = option.key; });
+    picker.append(el('div', { class: 'field field--choice' },
+      radio,
+      el('label', { for: id, text: option.label }),
+      option.warning ? el('div', { class: 'hint', text: option.warning }) : null,
+    ));
+  });
+  quote.payment_options.filter((option) => !option.available).forEach((option) => {
+    picker.append(el('p', { class: 'subtle', text: `${option.label} is not available right now.` }));
+  });
+  container.append(picker);
+
   container.append(el('section', { class: 'card' },
     el('h2', { text: 'What happens next' }),
     el('ol', { class: 'timeline' }, quote.sequence.map((step, index) => el('li', {
@@ -1150,9 +1192,13 @@ async function startCheckoutPage(tierId, context) {
       el('button', {
         class: 'button button--primary', type: 'button', text: 'Create pending order and open BTCPay',
         onclick: async (event) => {
+          if (!chosen) {
+            ui.toast('Choose a coin or token to pay with first.', 'error');
+            return;
+          }
           ui.setBusy(event.currentTarget, true, 'Creating order…');
           try {
-            const intent = await api('/api/payments/intents', { method: 'POST', body: { tier_id: tierId } });
+            const intent = await api('/api/payments/intents', { method: 'POST', body: { tier_id: tierId, asset: chosen } });
             context.navigate(`/checkout/${intent.order_ref}`);
             if (intent.checkout_url) {
               window.open(intent.checkout_url, '_blank', 'noopener');
@@ -1188,7 +1234,8 @@ async function orderStatusPage(orderRef, context) {
         el('dl', { class: 'kv' },
           el('dt', { text: 'Order reference' }), el('dd', { class: 'mono', text: order.order_ref }),
           el('dt', { text: 'Amount' }), el('dd', { text: `${money(order.amount_cents)} (${order.currency})` }),
-          el('dt', { text: 'BTC quoted' }), el('dd', { text: ui.sats(order.btc_amount_sats) }),
+          el('dt', { text: 'Paying with' }), el('dd', { text: ui.assetName(order) }),
+          el('dt', { text: 'Amount quoted' }), el('dd', { text: ui.assetAmount(order) }),
           el('dt', { text: 'Created' }), el('dd', { text: ui.formatDateTime(order.created_at) }),
           el('dt', { text: 'Checkout expires' }), el('dd', { text: ui.formatDateTime(order.expires_at) }),
           order.settled_at ? el('dt', { text: 'Settled' }) : null,
@@ -1212,7 +1259,7 @@ async function orderStatusPage(orderRef, context) {
       const actions = el('div', { class: 'button-row' },
         order.checkout_url ? el('a', {
           class: 'button button--primary', href: order.checkout_url, target: '_blank', rel: 'noopener noreferrer',
-          text: 'Open BTC checkout',
+          text: 'Open crypto checkout',
         }) : null,
         el('button', {
           class: 'button', type: 'button', text: 'Check payment status now',

@@ -482,6 +482,9 @@ summary:focus-visible,
 .form { display: grid; gap: 1.05rem; max-width: 620px; }
 
 .field { display: grid; gap: 0.35rem; }
+.field--choice { grid-template-columns: auto 1fr; align-items: center; column-gap: 0.65rem; padding: 0.55rem 0.2rem; }
+.field--choice input[type="radio"] { width: 1.15rem; height: 1.15rem; accent-color: var(--accent, #6366f1); margin: 0; }
+.field--choice .hint { grid-column: 2; }
 
 .field label { font-weight: 600; }
 

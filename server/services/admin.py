@@ -331,7 +331,7 @@ def list_creators(ctx, admin: Auth, *, query: str | None = None, status: str | N
               (SELECT COUNT(*) FROM memberships m WHERE m.creator_id = c.id AND m.status='active' AND m.ends_at > ?)
                 AS active_members,
               (SELECT COALESCE(SUM(i.amount_cents),0) FROM invoices i WHERE i.creator_id = c.id) AS gross_cents,
-              (SELECT COUNT(*) FROM creator_payouts cp WHERE cp.creator_id = c.id) AS payout_on_file
+              (SELECT COUNT(*) FROM creator_wallets cp WHERE cp.creator_id = c.id) AS payout_on_file
             FROM creator_pages c JOIN users u ON u.id = c.user_id
             {where}
             ORDER BY c.created_at DESC LIMIT 200

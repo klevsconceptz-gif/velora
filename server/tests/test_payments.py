@@ -55,7 +55,7 @@ class CheckoutTests(VeloraTestCase):
         creator_owner = Client(self.app)
         seed = self.seed_creator(creator_owner)
         with self.db.transaction() as conn:
-            conn.execute("DELETE FROM creator_payouts WHERE creator_id = ?", (seed["page_id"],))
+            conn.execute("DELETE FROM creator_wallets WHERE creator_id = ?", (seed["page_id"],))
         member = self.register("member3@example.com")
         response = member.post("/api/payments/intents", json_body={"tier_id": seed["tier_id"]})
         self.assertEqual(response.status, 409)

@@ -187,7 +187,7 @@ class MaintenanceCommandTests(CliTestCase):
     def test_status_reports_configuration_and_contents(self):
         code, output = self.run_cli(["status"])
         self.assertEqual(code, 0, output)
-        self.assertIn("migrations applied : 11", output)
+        self.assertIn("migrations applied : 12", output)
         self.assertIn("accounts           : 0 (active verified admins: 0)", output)
         self.assertIn("btcpay configured  : True", output)
         for secret in ("test-api-key", "test-webhook-secret", "test-secret-key-not-used-outside-tests"):

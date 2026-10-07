@@ -24,6 +24,9 @@ from ..app import Velora
 WEB_ROOT = Path(__file__).resolve().parent.parent.parent / "web"
 
 
+INVOICE_METHOD = "__invoice_method__"  # settle with whatever method the invoice was created for
+
+
 class FakeBtcPay:
     """In-process stand-in for a hosted BTCPay Server.
 
@@ -32,14 +35,34 @@ class FakeBtcPay:
     exercised without touching a network.
     """
 
+    # Pretend USD prices, so quoted amounts are deterministic.
+    RATES = {"BTC-CHAIN": 60_000, "LTC-CHAIN": 100, "ETH-CHAIN": 3_000, "BCH-CHAIN": 400,
+             "DOGE-CHAIN": 0.25, "XMR-CHAIN": 150, "BNB-CHAIN": 600, "TRX-CHAIN": 0.125,
+             "SOL-CHAIN": 150, "XRP-CHAIN": 0.5}
+
     def __init__(self):
         self.invoices: dict[str, dict] = {}
         self.created: list[dict] = []
         self.next_id = 1
         self.fail_next: str | None = None
+        from ..wallets import CATALOG
+
+        self.decimals = {asset.method_id: asset.decimals for asset in CATALOG}
+        # Methods "enabled on the store". Tests narrow this to exercise availability.
+        self.enabled_methods: set[str] = set(self.decimals)
+
+    def rate(self, method: str) -> float:
+        return float(self.RATES.get(method, 1))  # stablecoins are $1
+
+    def quote_units(self, amount_cents: int, method: str) -> int:
+        from decimal import Decimal
+
+        usd = Decimal(amount_cents) / 100
+        return int((usd / Decimal(str(self.rate(method))) * (Decimal(10) ** self.decimals.get(method, 8)))
+                   .to_integral_value())
 
     def create_invoice(self, *, amount_cents: int, order_ref: str, item_description: str,
-                       redirect_url: str, ttl_minutes: int) -> dict:
+                       redirect_url: str, ttl_minutes: int, payment_method: str = "BTC-CHAIN") -> dict:
         if self.fail_next == "create":
             self.fail_next = None
             from ..btcpay import BtcPayError
@@ -47,20 +70,21 @@ class FakeBtcPay:
             raise BtcPayError("fake transport failure", kind="transport")
         invoice_id = f"FAKE-INV-{self.next_id}"
         self.next_id += 1
-        sats = int(round(amount_cents / 100 / 60_000 * 10**8))  # pretend BTC = $60k
+        units = self.quote_units(amount_cents, payment_method)
+        places = self.decimals.get(payment_method, 8)
         payload = {
             "id": invoice_id,
             "status": "New",
             "amount": f"{amount_cents / 100:.2f}",
             "currency": "USD",
-            "rate": "60000.00",
+            "rate": f"{self.rate(payment_method):.2f}",
             "checkoutLink": f"https://btcpay.test/i/{invoice_id}",
             "paymentMethods": [
                 {
-                    "paymentMethod": "BTC-CHAIN",
+                    "paymentMethod": payment_method,
                     "destination": "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-                    "due": f"{sats / 10**8:.8f}",
-                    "rate": "60000.00",
+                    "due": f"{units / 10**places:.{places}f}",
+                    "rate": f"{self.rate(payment_method):.2f}",
                 }
             ],
             "metadata": {"orderRef": order_ref, "orderId": order_ref,
@@ -86,19 +110,25 @@ class FakeBtcPay:
         return self.invoices[invoice_id]
 
     # ---- helpers used by tests ------------------------------------------------
-    def settle(self, invoice_id: str, *, sats: int | None = None, confirmations: int = 2,
-               method: str = "BTC-CHAIN", raw_amount: str | None = None, extra_payment: dict | None = None,
-               additional_status: str | None = None, status: str = "Settled") -> dict:
+    def settle(self, invoice_id: str, *, sats: int | None = None, units: int | None = None,
+               confirmations: int = 2, method: str | None = INVOICE_METHOD, raw_amount: str | None = None,
+               extra_payment: dict | None = None, additional_status: str | None = None,
+               status: str = "Settled") -> dict:
+        """Settle an invoice. ``method`` defaults to the method the invoice was created for."""
         invoice = self.invoices[invoice_id]
-        target_sats = sats if sats is not None else int(
-            round(float(invoice["amount"]) / 60_000 * 10**8))
+        invoice_method = invoice["paymentMethods"][0]["paymentMethod"]
+        if method == INVOICE_METHOD:
+            method = invoice_method
+        places = self.decimals.get(method or invoice_method, 8)
+        due_units = self.quote_units(int(round(float(invoice["amount"]) * 100)), invoice_method)
+        target = units if units is not None else sats if sats is not None else due_units
         invoice["status"] = status
         invoice["additionalStatus"] = additional_status
-        amount_btc = raw_amount or f"{target_sats / 10**8:.8f}"
+        amount = raw_amount or f"{target / 10**places:.{places}f}"
         payment = {
             "status": "Settled",
-            "amount": amount_btc,
-            "currency": "BTC",
+            "amount": amount,
+            "currency": (method or invoice_method).split("-")[0],
             "method": method,
             "confirmations": confirmations,
             "settledTime": "2026-01-01T00:00:00Z",
@@ -129,7 +159,17 @@ class FakeTransport:
                 item_description=payload["metadata"]["itemDesc"],
                 redirect_url=payload["checkout"]["redirectURL"],
                 ttl_minutes=payload["checkout"]["expirationMinutes"],
+                payment_method=(payload["checkout"].get("paymentMethods") or ["BTC-CHAIN"])[0],
             )
+        elif method == "GET" and url.endswith("/payment-methods"):
+            if self.fake.fail_next == "methods":
+                self.fake.fail_next = None
+                from ..btcpay import BtcPayError
+
+                raise BtcPayError("fake transport failure", kind="transport")
+            enabled = [{"paymentMethodId": m, "enabled": True} for m in sorted(self.fake.enabled_methods)]
+            enabled.append({"paymentMethodId": "BTC-LN", "enabled": False})
+            return 200, json.dumps(enabled).encode("utf-8")
         elif method == "GET" and "/invoices/" in url:
             result = self.fake.get_invoice(url.rsplit("/", 1)[-1])
         else:  # pragma: no cover - defensive
@@ -273,6 +313,7 @@ class VeloraTestCase(unittest.TestCase):
     email_transport = "file"
     btcpay = True
     environment = "test"
+    extra_environ: dict = {}
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="velora-test-"))
@@ -299,6 +340,7 @@ class VeloraTestCase(unittest.TestCase):
                     "VELORA_BTCPAY_WEBHOOK_SECRET": "test-webhook-secret",
                 }
             )
+        environ.update(self.extra_environ)
         self.environ = environ
         self.config = build_config(environ)
         self.db = Database(self.config.db_path)
@@ -404,7 +446,8 @@ class VeloraTestCase(unittest.TestCase):
     def seed_creator(self, client: Client, *, email: str = "creator@velora.test",
                      handle: str = "sample-creator", page_name: str = "Sample Studio",
                      category: str = "art", price_cents: int = 900,
-                     address: str = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq") -> dict:
+                     address: str = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+                     wallets: dict | None = None) -> dict:
         """Create a creator page, tier and payout address through the API + CLI-style SQL."""
         self.register(email, display_name=page_name, client=client)
         with self.db.transaction() as conn:
@@ -429,11 +472,19 @@ class VeloraTestCase(unittest.TestCase):
             ).lastrowid
             conn.execute(
                 """
-                INSERT INTO creator_payouts (creator_id, btc_address, address_kind, saved_at)
-                VALUES (?, ?, 'bech32', ?)
+                INSERT INTO creator_wallets (creator_id, asset, address, address_kind, saved_at)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (page_id, address, now_iso()),
+                (page_id, "btc", address, "bech32", now_iso()),
             )
+            for asset_key, wallet_address in (wallets or {}).items():
+                conn.execute(
+                    """
+                    INSERT INTO creator_wallets (creator_id, asset, address, address_kind, saved_at)
+                    VALUES (?, ?, ?, 'test', ?)
+                    """,
+                    (page_id, asset_key, wallet_address, now_iso()),
+                )
         return {"page_id": page_id, "tier_id": tier_id, "handle": handle}
 
     def create_post(self, client: Client, *, title="Behind the scenes", visibility="members",
@@ -455,8 +506,11 @@ class VeloraTestCase(unittest.TestCase):
         return response.json
 
     # ---- payment helpers -----------------------------------------------------
-    def start_checkout(self, client: Client, tier_id: int) -> dict:
-        response = client.post("/api/payments/intents", json_body={"tier_id": tier_id})
+    def start_checkout(self, client: Client, tier_id: int, asset: str | None = None) -> dict:
+        body = {"tier_id": tier_id}
+        if asset is not None:
+            body["asset"] = asset
+        response = client.post("/api/payments/intents", json_body=body)
         if response.status != 201:
             raise AssertionError(f"checkout failed: {response.status} {response.text}")
         return response.json
@@ -468,11 +522,11 @@ class VeloraTestCase(unittest.TestCase):
         raise AssertionError(f"no fake invoice for {order_ref}")
 
     def settle_and_verify(self, client: Client, order_ref: str, *, confirmations: int = 2,
-                          sats: int | None = None, method: str = "BTC-CHAIN",
+                          sats: int | None = None, method: str | None = INVOICE_METHOD, units: int | None = None,
                           raw_amount: str | None = None, status: str = "Settled",
                           additional_status: str | None = None) -> Response:
         invoice = self.invoice_for(order_ref)
-        self.fake.settle(invoice["id"], confirmations=confirmations, sats=sats, method=method,
+        self.fake.settle(invoice["id"], confirmations=confirmations, sats=sats, units=units, method=method,
                          raw_amount=raw_amount, status=status, additional_status=additional_status)
         return client.post(f"/api/payments/intents/{self._intent_id(client, order_ref)}/refresh")
 

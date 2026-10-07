@@ -97,7 +97,7 @@ jobs:
 
           status, health = get("/api/health")
           assert status == 200 and health["ok"], health
-          assert health["migrations_applied"] == 11, health
+          assert health["migrations_applied"] == 12, health
           # No BTCPay is configured in CI, and the app must say so rather than pretend.
           assert health["btcpay_configured"] is False, health
 

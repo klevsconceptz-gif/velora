@@ -216,7 +216,7 @@ class TransportTests(VeloraTestCase):
         payload = Client(self.app).get("/api/health").json
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["database"], "ready")
-        self.assertEqual(payload["migrations_applied"], 11)
+        self.assertEqual(payload["migrations_applied"], 12)
         self.assertTrue(payload["btcpay_configured"])
         self.assertNotIn("secret", json.dumps(payload).lower())
 

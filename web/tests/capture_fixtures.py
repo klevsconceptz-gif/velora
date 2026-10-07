@@ -59,7 +59,9 @@ def build_world(case: _World):
 
     creator = Client(case.app)
     seed = case.seed_creator(creator, email="creator@velora.test", handle="sample-creator",
-                             page_name="Sample Studio", category="art", price_cents=1500)
+                             page_name="Sample Studio", category="art", price_cents=1500,
+                             wallets={"eth": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                                      "usdt_trc20": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"})
     public_post = case.create_post(creator, title="Public sketchbook", visibility="public",
                                    teaser="A public teaser.", body="A public page body.")
     members_post = case.create_post(creator, title="Members-only process notes",
@@ -81,7 +83,7 @@ def build_world(case: _World):
     member = Client(case.app)
     clear_rate_limits(case)
     case.register("member@velora.test", display_name="Member Person", client=member)
-    order = case.start_checkout(member, seed["tier_id"])
+    order = case.start_checkout(member, seed["tier_id"], asset="usdt_trc20")
     case.settle_and_verify(member, order["order_ref"])
     membership_id = member.get("/api/memberships").json["items"][0]["membership"]["id"]
     member.post(f"/api/memberships/{membership_id}/cancel")
@@ -106,6 +108,7 @@ def build_world(case: _World):
     applicant.post("/api/creators/apply", json_body={
         "category": "music", "pitch": "I write original scores and want to share process work.",
         "desired_handle": "hopeful-scores",
+        "wallets": {"usdt_trc20": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
     })
 
     # A second creator without a payout destination exercises the "checkout closed"
@@ -116,8 +119,8 @@ def build_world(case: _World):
     bare_seed = case.seed_creator(bare, email="bare@velora.test", handle="bare-page",
                                   page_name="Bare Page", category="writing", price_cents=500)
     with case.db.transaction() as conn:
-        conn.execute("DELETE FROM creator_payouts WHERE creator_id = ?", (bare_seed["page_id"],))
-    held_order = case.start_checkout(member, seed["tier_id"])
+        conn.execute("DELETE FROM creator_wallets WHERE creator_id = ?", (bare_seed["page_id"],))
+    held_order = case.start_checkout(member, seed["tier_id"], asset="btc")
     held_result = case.settle_and_verify(member, held_order["order_ref"], sats=900_000)
     if held_result.json.get("status") != "held":
         raise AssertionError(f"expected a held payment, got {held_result.status} {held_result.text}")
@@ -183,7 +186,7 @@ def capture(case: _World, world) -> dict:
         ("creator", creator, "GET", "/api/studio/posts?status=published"),
         ("creator", creator, "GET", "/api/studio/tiers"),
         ("creator", creator, "GET", "/api/studio/members"),
-        ("creator", creator, "GET", "/api/studio/payout"),
+        ("creator", creator, "GET", "/api/studio/wallets"),
         ("creator", creator, "GET", "/api/payments/quote?tier_id=%d" % world["handles"]["tier_id"]),
         ("member", member, "GET", "/api/payments/quote?tier_id=%d" % world["handles"]["tier_id"]),
         ("applicant", applicant, "GET", "/api/creators/applications/mine"),

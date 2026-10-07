@@ -22,7 +22,7 @@ from server.tests.harness import Client, VeloraTestCase  # noqa: E402
 
 EXPECTED_TABLES = {
     "users", "sessions", "email_tokens", "admin_invitations", "account_actions",
-    "creator_pages", "creator_applications", "creator_payouts", "creator_page_views", "tiers",
+    "creator_pages", "creator_applications", "creator_wallets", "creator_page_views", "tiers",
     "posts", "post_media", "post_tiers", "orientation_disclosures",
     "memberships", "payment_intents", "invoices", "ledger_entries", "webhook_events",
     "threads", "messages", "reports", "admin_notes", "audit_log", "rate_limits",
@@ -36,25 +36,25 @@ class MigrationRunnerTests(VeloraTestCase):
 
     def test_every_migration_file_is_discovered_in_order(self):
         found = migrations_module.discover()
-        self.assertEqual(len(found), 11, [name for name, _ in found])
+        self.assertEqual(len(found), 12, [name for name, _ in found])
         versions = [version for version, _ in found]
         self.assertEqual(versions, sorted(versions))
-        self.assertEqual(versions, [f"{index:04d}" for index in range(1, 12)])
+        self.assertEqual(versions, [f"{index:04d}" for index in range(1, 13)])
         filenames = [path.name for _, path in found]
         self.assertEqual(filenames[0], "0001_core_accounts.sql")
-        self.assertEqual(filenames[-1], "0011_financial_integrity.sql")
+        self.assertEqual(filenames[-1], "0012_multi_asset_payments.sql")
 
     def test_status_reports_everything_applied_and_nothing_pending(self):
         state = migrations_module.status(self.db)
         self.assertEqual(state["pending"], [])
         self.assertEqual(state["problems"], [])
-        self.assertEqual(len(state["applied"]), 11)
+        self.assertEqual(len(state["applied"]), 12)
 
     def test_applying_twice_changes_nothing(self):
         applied = migrations_module.apply_all(self.db, log=lambda message: None)
         self.assertEqual(applied, [])
         state = migrations_module.status(self.db)
-        self.assertEqual(len(state["applied"]), 11)
+        self.assertEqual(len(state["applied"]), 12)
 
     def test_checksum_mismatch_is_reported(self):
         with self.db.transaction() as conn:

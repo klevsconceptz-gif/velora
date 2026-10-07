@@ -94,7 +94,7 @@ export async function overviewPage(params, query, context) {
         el('h2', { text: 'Environment' }),
         el('dl', { class: 'kv' },
           el('dt', { text: 'Environment' }), el('dd', { text: payload.environment }),
-          el('dt', { text: 'BTC checkout' }), el('dd', { text: payload.payment_configured ? 'Configured (on-chain BTC)' : 'Not configured — checkout disabled' }),
+          el('dt', { text: 'Crypto checkout' }), el('dd', { text: payload.payment_configured ? 'Configured (on-chain crypto and Tether)' : 'Not configured — checkout disabled' }),
           el('dt', { text: 'Email delivery' }), el('dd', { text: payload.email_configured ? 'Configured' : 'Not configured — verification email cannot be sent' }),
           el('dt', { text: 'Ledger balanced' }), el('dd', { text: payload.ledger_balanced ? 'Yes' : 'No — investigate' }),
           el('dt', { text: 'Administrators' }), el('dd', { text: String(counts.admins) }),
@@ -354,7 +354,7 @@ export async function creatorsPage(params, query, context) {
       el('h3', {}, el('a', { href: `#/c/${creator.handle}`, text: creator.page_name })),
       el('div', { class: 'cluster' },
         badge(creator.status, creator.status === 'active' ? 'active' : creator.status),
-        creator.payout_address_on_file ? chip('Payout address on file', 'ok') : chip('No payout address', 'warn'),
+        creator.payout_address_on_file ? chip('Wallet on file', 'ok') : chip('No wallet address', 'warn'),
       ),
     ),
     el('p', { class: 'muted', text: creator.tagline || 'No tagline' }),
@@ -395,17 +395,20 @@ export async function creatorsPage(params, query, context) {
         },
       }) : null,
       el('button', {
-        class: 'button button--small', type: 'button', text: 'View payout address',
+        class: 'button button--small', type: 'button', text: 'View wallet addresses',
         onclick: async (event) => {
           ui.setBusy(event.currentTarget, true, 'Loading…');
           try {
             const result = await api(`/api/admin/creators/${creator.id}/payout`);
             const payout = result.payout;
             const dialog = el('dialog', { 'aria-labelledby': 'payout-title' },
-              el('h3', { id: 'payout-title', text: `Payout address · ${creator.page_name}` }),
-              payout.btc_address
-                ? el('p', { class: 'mono', text: payout.btc_address })
-                : el('p', { class: 'muted', text: 'No address recorded.' }),
+              el('h3', { id: 'payout-title', text: `Wallet addresses · ${creator.page_name}` }),
+              payout.wallets.length
+                ? el('dl', { class: 'kv' }, payout.wallets.flatMap((wallet) => [
+                  el('dt', { text: wallet.asset.label }),
+                  el('dd', { class: 'mono', text: wallet.address }),
+                ]))
+                : el('p', { class: 'muted', text: 'No wallet addresses recorded.' }),
               el('p', { class: 'subtle', text: payout.notice }),
               el('div', { class: 'button-row' }, el('button', { class: 'button', type: 'button', text: 'Close', onclick: () => dialog.close() })),
             );
@@ -432,7 +435,7 @@ export async function creatorsPage(params, query, context) {
       }),
     ),
   )));
-  return shell('Creator pages', 'Payout addresses are visible only to the creator and authorized administrators.', 'creators', [cards]);
+  return shell('Creator pages', 'Wallet addresses are visible only to the creator and authorized administrators.', 'creators', [cards]);
 }
 
 export async function applicationsPage(params, query, context) {
@@ -684,7 +687,7 @@ export async function paymentsPage(params, query, context) {
     el('td', { text: intent.creator.page_name }),
     el('td', { text: `${money(intent.amount_cents)} · ${intent.tier_name}` }),
     el('td', {}, badge(intent.status_label, intent.status)),
-    el('td', { text: ui.sats(intent.btc_amount_sats) }),
+    el('td', { text: intent.asset_amount ? `${ui.assetAmount(intent)} · ${ui.assetName(intent)}` : ui.assetName(intent) }),
     el('td', { text: ui.formatDateTime(intent.created_at) }),
     el('td', {}, el('div', { class: 'button-row' },
       intent.status !== 'settled' ? el('button', {
@@ -733,7 +736,7 @@ export async function paymentsPage(params, query, context) {
       el('thead', {}, el('tr', {},
         el('th', { scope: 'col', text: 'Order' }), el('th', { scope: 'col', text: 'Member' }),
         el('th', { scope: 'col', text: 'Creator' }), el('th', { scope: 'col', text: 'Amount' }),
-        el('th', { scope: 'col', text: 'Status' }), el('th', { scope: 'col', text: 'BTC' }),
+        el('th', { scope: 'col', text: 'Status' }), el('th', { scope: 'col', text: 'Crypto amount' }),
         el('th', { scope: 'col', text: 'Created' }), el('th', { scope: 'col', text: 'Actions' }),
       )),
       el('tbody', {}, rows),

@@ -442,7 +442,7 @@ class FinancialIntegrityTests(VeloraTestCase):
         second = self.register("attempt-member@velora.test", display_name="Attempt Member")
         with self.db.transaction() as conn:
             conn.execute(
-                "UPDATE creator_payouts SET btc_address = btc_address WHERE creator_id = ?",
+                "UPDATE creator_wallets SET address = address WHERE creator_id = ?",
                 (self.seed["page_id"],),
             )
         pending = second.post("/api/payments/intents", json_body={"tier_id": self.seed["tier_id"]})
@@ -718,7 +718,7 @@ class StartupSafetyTests(VeloraTestCase):
         with self.db.connection() as conn:
             for table in ("users", "creator_pages", "posts", "tiers", "payment_intents",
                           "invoices", "ledger_entries", "memberships", "admin_invitations",
-                          "reports", "threads", "messages", "creator_payouts"):
+                          "reports", "threads", "messages", "creator_wallets"):
                 count = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
                 self.assertEqual(count, 0, table)
 

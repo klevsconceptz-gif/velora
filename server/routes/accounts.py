@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..wallets import ASSET_KEYS, ASSETS
 from ..http import bad_request, json_response
 from ..routing import AUTH_NONE, AUTH_OPTIONAL, AUTH_REQUIRED, route
 from ..serializers import creator_application, user_private
@@ -40,9 +41,11 @@ def bootstrap(request, ctx, auth, params):
         "email_status": ctx.email.status(),
         "checkout": {
             "available": ctx.config.btcpay_configured,
-            "methods": ["btc_onchain"] if ctx.config.btcpay_configured else [],
+            "methods": list(ctx.config.offered_assets) if ctx.config.btcpay_configured else [],
             "reason": None if ctx.config.btcpay_configured else "btcpay_not_configured",
         },
+        # Every coin and token a creator can record a wallet for.
+        "payment_assets": [ASSETS[key].public() for key in ASSET_KEYS],
         "categories": creators_service.categories(),
         "orientation_options": {
             "presets": [{"value": value, "label": OPTION_LABELS.get(value, value)} for value in ORIENTATION_PRESETS],
@@ -344,7 +347,8 @@ def privacy_summary(request, ctx, auth, params):
                 "No location data and no IP-geolocation gate.",
             ],
             "payments": (
-                "Memberships are paid in on-chain BTC through the operator's hosted BTCPay Server. "
+                "Memberships are paid on-chain in a cryptocurrency or Tether token through the operator's "
+                "hosted BTCPay Server. "
                 "Velora stores the settled invoice, the frozen platform fee and an append-only ledger; "
                 "BTCPay holds the checkout interaction."
             ),

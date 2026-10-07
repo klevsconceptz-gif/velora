@@ -63,6 +63,17 @@ export function sats(value) {
   return `${Number(value).toLocaleString()} sats`;
 }
 
+/** The exact amount quoted/settled in the chosen coin, e.g. "12.5 USDT". */
+export function assetAmount(item) {
+  if (!item || item.asset_amount === null || item.asset_amount === undefined) return '—';
+  return `${item.asset_amount} ${item.asset_symbol || ''}`.trim();
+}
+
+/** "USDT · Tron (TRC-20)" — the network matters for tokens, so always show it. */
+export function assetName(item) {
+  return (item && (item.asset_label || item.asset_symbol)) || 'Crypto';
+}
+
 export function formatDate(iso) {
   if (!iso) return '—';
   const date = new Date(iso);

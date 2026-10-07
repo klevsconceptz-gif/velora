@@ -380,6 +380,7 @@ async function applyState(role) {
   appState.emailStatus = bootstrap.email_status || null;
   appState.checkout = bootstrap.checkout || { available: false };
   appState.categories = bootstrap.categories || [];
+  appState.paymentAssets = bootstrap.payment_assets || [];
   appState.orientationOptions = bootstrap.orientation_options || null;
   appState.reportReasons = bootstrap.report_reasons || [];
   appState.session = bootstrap.session || { authenticated: false };
@@ -429,6 +430,7 @@ function exampleFor(pattern) {
 
 const results = [];
 const problems = [];
+const renderedText = new Map();
 
 for (const route of routes) {
   const role = roleForRoute(route.name);
@@ -465,6 +467,7 @@ for (const route of routes) {
   if (text.includes('[object Object]')) {
     problems.push(`${route.name} (${route.pattern}): rendered "[object Object]"`);
   }
+  renderedText.set(route.name, text);
   const heading = node.querySelector('h1');
   results.push({
     route: route.name,
@@ -484,6 +487,35 @@ if (lockedPost.textContent.includes(membersBody)) {
 const publicCreator = await publicViews.creatorPage({ handle: 'sample-creator' }, {}, { route: { path: '/c/sample-creator' }, navigate() {}, reload() {}, refreshShell() {} });
 if (publicCreator.textContent.includes(membersBody)) {
   problems.push('anonymous creator page leaked members-only body text');
+}
+
+// Multi-asset payments: wallets, the application form and the coin picker.
+function expectText(routeName, needles) {
+  const text = renderedText.get(routeName) || '';
+  for (const needle of needles) {
+    if (!text.includes(needle)) problems.push(`${routeName} did not render ${JSON.stringify(needle)}`);
+  }
+}
+expectText('studioPayout', ['Wallet addresses', 'Tether and stablecoins', 'USDT · Tron (TRC-20)', 'USDT · Ethereum (ERC-20)',
+  'ETH', 'Remove', 'Never paste a seed phrase']);
+expectText('apply', ['USDT · Tron (TRC-20)', 'Wallet addresses (optional now']);
+{
+  const quoteKey = Object.keys(fixtures).find((key) => key.startsWith('GET /api/payments/quote?tier_id='));
+  if (!quoteKey) {
+    problems.push('no captured checkout quote');
+  } else {
+    await applyState('member');
+    const tier = quoteKey.split('=').pop();
+    const checkout = await accountViews.checkoutPage({ order: `tier-${tier}` }, {},
+      { route: { path: `/checkout/tier-${tier}` }, navigate() {}, reload() {}, refreshShell() {} });
+    const radios = checkout.querySelectorAll('input[type="radio"]');
+    if (radios.length < 2) problems.push(`checkout picker rendered ${radios.length} coin choices, expected several`);
+    const text = checkout.textContent;
+    for (const needle of ['Pay with', 'USDT · Tron (TRC-20)', 'ETH', 'BTC']) {
+      if (!text.includes(needle)) problems.push(`checkout picker did not render ${JSON.stringify(needle)}`);
+    }
+    if (/Bitcoin on-chain only/i.test(text)) problems.push('checkout still claims Bitcoin-only payment');
+  }
 }
 
 for (const call of unmatchedCalls) {

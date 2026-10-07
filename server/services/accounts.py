@@ -842,11 +842,12 @@ def export_personal_data(ctx, auth: Auth) -> dict:
             "SELECT id, creator_id, tier_id, status, started_at, ends_at, cancel_requested_at "
             "FROM memberships WHERE user_id = ?", (auth.user_id,))]
         intents = [dict(row) for row in conn.execute(
-            "SELECT order_ref, creator_id, tier_id, amount_cents, status, created_at, settled_at "
+            "SELECT order_ref, creator_id, tier_id, amount_cents, asset, asset_amount_atomic, status, "
+            "created_at, settled_at "
             "FROM payment_intents WHERE user_id = ?", (auth.user_id,))]
         invoices = [dict(row) for row in conn.execute(
             "SELECT order_ref, amount_cents, creator_net_cents, platform_fee_cents, btc_amount_sats, "
-            "settled_at FROM invoices WHERE user_id = ?", (auth.user_id,))]
+            "asset, asset_amount_atomic, settled_at FROM invoices WHERE user_id = ?", (auth.user_id,))]
         disclosures = [dict(row) for row in conn.execute(
             "SELECT value_kind, visibility, created_at FROM orientation_disclosures WHERE user_id = ?",
             (auth.user_id,))]

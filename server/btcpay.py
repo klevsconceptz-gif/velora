@@ -1,4 +1,8 @@
-"""Minimal BTCPay Server Greenfield API client (bitcoin, on-chain only).
+"""Minimal BTCPay Server Greenfield API client (on-chain coins and tokens).
+
+A checkout asks BTCPay for one invoice restricted to the single on-chain payment
+method the member chose (Bitcoin, Litecoin, Ethereum, Tether on Tron ... as
+enabled on the operator's BTCPay store). Lightning is never requested.
 
 Everything here fails closed:
 
@@ -9,8 +13,8 @@ Everything here fails closed:
 * Plain-HTTP base URLs are refused unless they point at localhost, so an API key
   cannot be sent over an unencrypted connection to a remote host.
 * :func:`classify_invoice` treats anything it cannot positively verify as
-  ``held``: partial, mismatched, late, overpaid, unverifiable or non-on-chain
-  payments never unlock content automatically.
+  ``held``: partial, mismatched, late, overpaid, unverifiable or paid-with-a-
+  different-method payments never unlock content automatically.
 """
 
 from __future__ import annotations
@@ -22,7 +26,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
-ONCHAIN_PAYMENT_METHOD = "BTC-CHAIN"
+DEFAULT_METHOD = "BTC-CHAIN"
+DEFAULT_DECIMALS = 8
 LOCALHOST_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # BTCPay surfaces some settlement oddities in ``additionalStatus``.
@@ -61,11 +66,16 @@ def _decimal(value) -> Decimal | None:
         return None
 
 
-def btc_to_sats(value) -> int | None:
+def to_units(value, decimals: int = DEFAULT_DECIMALS) -> int | None:
+    """A coin amount as BTCPay reports it -> integer smallest units."""
     amount = _decimal(value)
-    if amount is None or amount < 0:
+    if amount is None or not amount.is_finite() or amount < 0:
         return None
-    return int((amount * Decimal(10**8)).to_integral_value())
+    return int((amount * (Decimal(10) ** decimals)).to_integral_value())
+
+
+def btc_to_sats(value) -> int | None:
+    return to_units(value, 8)
 
 
 def usd_to_cents(value) -> int | None:
@@ -83,14 +93,14 @@ class NormalizedInvoice:
     status: str
     amount_cents: int | None
     currency: str
-    due_sats: int | None
+    due_units: int | None
     rate: str | None
     checkout_link: str | None
-    paid_sats: int
-    onchain_settled_sats: int
-    onchain_confirmed: bool
-    onchain_payment_count: int
-    non_onchain_payment_count: int
+    paid_units: int
+    settled_units: int
+    confirmed: bool
+    matching_payment_count: int
+    other_method_payment_count: int
     unverifiable_payment_count: int
     latest_payment_at: str | None
     metadata: dict
@@ -100,6 +110,7 @@ class NormalizedInvoice:
     expired: bool
     invalid: bool
     payments_seen: int = 0
+    method_id: str = DEFAULT_METHOD
     raw_keys: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -166,8 +177,8 @@ class BtcPayClient:
 
     # ---- operations -----------------------------------------------------------
     def create_invoice(self, *, amount_cents: int, order_ref: str, item_description: str,
-                       redirect_url: str, ttl_minutes: int) -> dict:
-        """Create an on-chain-only BTC invoice priced in USD."""
+                       redirect_url: str, ttl_minutes: int, payment_method: str = DEFAULT_METHOD) -> dict:
+        """Create an invoice priced in USD and payable only with ``payment_method``."""
         payload = {
             "amount": f"{amount_cents / 100:.2f}",
             "currency": "USD",
@@ -178,14 +189,43 @@ class BtcPayClient:
                 "platform": "velora",
             },
             "checkout": {
-                # Ask for on-chain BTC only. Lightning is never enabled here.
-                "defaultPaymentMethod": ONCHAIN_PAYMENT_METHOD,
+                # One on-chain method per invoice. Lightning is never offered.
+                "paymentMethods": [payment_method],
+                "defaultPaymentMethod": payment_method,
                 "expirationMinutes": int(ttl_minutes),
                 "redirectURL": redirect_url,
                 "redirectAutomatically": False,
             },
         }
         return self._request("POST", f"/api/v1/stores/{self.store_id}/invoices", payload)
+
+    def enabled_payment_methods(self) -> set[str]:
+        """Payment-method ids that are enabled on the configured store."""
+        if not self.configured:
+            raise BtcPayNotConfigured()
+        url = f"{self.base_url}/api/v1/stores/{self.store_id}/payment-methods"
+        headers = {"Authorization": f"token {self.api_key}", "Accept": "application/json"}
+        status, raw = self._transport("GET", url, headers, None)
+        if status >= 400:
+            raise BtcPayError(f"BTCPay Server rejected the request (HTTP {status}).",
+                              kind="api_error", status=status)
+        try:
+            parsed = json.loads(raw.decode("utf-8", "replace")) if raw else None
+        except json.JSONDecodeError:
+            parsed = None
+        if not isinstance(parsed, list):
+            raise BtcPayError("BTCPay Server returned a response Velora could not read.",
+                              kind="bad_response", status=status)
+        enabled: set[str] = set()
+        for entry in parsed:
+            if not isinstance(entry, dict) or entry.get("enabled") is not True:
+                continue
+            method = entry.get("paymentMethodId") or entry.get("paymentMethod")
+            if not method and entry.get("cryptoCode"):
+                method = f"{entry['cryptoCode']}-CHAIN"
+            if isinstance(method, str) and method:
+                enabled.add(method)
+        return enabled
 
     def get_invoice(self, invoice_id: str) -> dict:
         safe_id = urllib.parse.quote(str(invoice_id), safe="")
@@ -206,8 +246,8 @@ def _assert_safe_base_url(base_url: str) -> None:
             )
 
 
-def _due_sats_from(raw: dict) -> int | None:
-    """The BTC amount BTCPay quoted for the on-chain payment method."""
+def _due_units_from(raw: dict, method_id: str, decimals: int) -> int | None:
+    """The amount BTCPay quoted for the chosen payment method, in smallest units."""
     methods = raw.get("paymentMethods") or raw.get("paymentMethodItems") or []
     if not isinstance(methods, list):
         return None
@@ -215,27 +255,33 @@ def _due_sats_from(raw: dict) -> int | None:
         if not isinstance(entry, dict):
             continue
         method = entry.get("paymentMethod") or entry.get("method") or entry.get("paymentMethodId")
-        if method != ONCHAIN_PAYMENT_METHOD:
+        if method != method_id:
             continue
         for key in ("due", "amount", "totalDue"):
             if entry.get(key) is not None:
-                value = btc_to_sats(entry.get(key))
+                value = to_units(entry.get(key), decimals)
                 if value is not None:
                     return value
     return None
 
 
-def normalize_invoice(raw: dict) -> NormalizedInvoice:
-    """Map a BTCPay invoice payload onto Velora's own normalized shape."""
+def normalize_invoice(raw: dict, method_id: str = DEFAULT_METHOD,
+                      decimals: int = DEFAULT_DECIMALS) -> NormalizedInvoice:
+    """Map a BTCPay invoice payload onto Velora's own normalized shape.
+
+    ``method_id`` is the payment method the member chose at checkout; a payment
+    made any other way (another coin, Lightning, a manual mark) is counted as an
+    *other-method* payment and the invoice is held for review.
+    """
     payments = raw.get("payments") or []
     if not isinstance(payments, list):
         payments = []
 
-    paid_sats = 0
-    onchain_settled = 0
-    onchain_confirmed = False
-    onchain_count = 0
-    non_onchain = 0
+    paid_units = 0
+    matching_settled = 0
+    confirmed = False
+    matching_count = 0
+    other_method = 0
     unverifiable = 0
     latest_payment_at = None
 
@@ -244,28 +290,29 @@ def normalize_invoice(raw: dict) -> NormalizedInvoice:
             unverifiable += 1
             continue
         method = payment.get("method") or payment.get("paymentMethod") or payment.get("paymentMethodId")
-        amount = btc_to_sats(payment.get("amount")) or 0
-        paid_sats += amount
+        amount = to_units(payment.get("amount") if payment.get("amount") is not None
+                          else payment.get("value"), decimals) or 0
+        paid_units += amount
         for key in ("settledTime", "receivedTime", "createdTime"):
             if payment.get(key):
                 latest_payment_at = str(payment[key])
                 break
         if method is None:
-            # Without a payment method we cannot prove this was on-chain BTC.
+            # Without a payment method we cannot prove which asset was paid.
             unverifiable += 1
             continue
-        if method == ONCHAIN_PAYMENT_METHOD:
-            onchain_count += 1
+        if method == method_id:
+            matching_count += 1
             if str(payment.get("status", "")).lower() == "settled":
-                onchain_settled += amount
+                matching_settled += amount
                 try:
                     confirmations = int(payment.get("confirmations") or 0)
                 except (TypeError, ValueError):
                     confirmations = 0
                 if confirmations > 0:
-                    onchain_confirmed = True
+                    confirmed = True
         else:
-            non_onchain += 1
+            other_method += 1
 
     status = str(raw.get("status") or "Unknown")
     metadata = raw.get("metadata") or {}
@@ -278,14 +325,14 @@ def normalize_invoice(raw: dict) -> NormalizedInvoice:
         status=status,
         amount_cents=usd_to_cents(raw.get("amount")),
         currency=str(raw.get("currency") or "").upper(),
-        due_sats=_due_sats_from(raw),
+        due_units=_due_units_from(raw, method_id, decimals),
         rate=(str(raw.get("rate")) if raw.get("rate") is not None else None),
         checkout_link=raw.get("checkoutLink"),
-        paid_sats=paid_sats,
-        onchain_settled_sats=onchain_settled,
-        onchain_confirmed=onchain_confirmed,
-        onchain_payment_count=onchain_count,
-        non_onchain_payment_count=non_onchain,
+        paid_units=paid_units,
+        settled_units=matching_settled,
+        confirmed=confirmed,
+        matching_payment_count=matching_count,
+        other_method_payment_count=other_method,
         unverifiable_payment_count=unverifiable,
         latest_payment_at=latest_payment_at,
         metadata=metadata,
@@ -295,6 +342,7 @@ def normalize_invoice(raw: dict) -> NormalizedInvoice:
         expired=status.lower() == "expired",
         invalid=status.lower() in ("invalid", "malformed"),
         payments_seen=len(payments),
+        method_id=method_id,
         raw_keys=tuple(sorted(str(key) for key in raw.keys())),
     )
 
@@ -304,7 +352,7 @@ class Classification:
     outcome: str          # settled | processing | pending | expired | invalid | held
     reason: str
     message: str
-    sats: int = 0
+    units: int = 0
     rate: str | None = None
 
     @property
@@ -375,15 +423,16 @@ def classify_invoice(invoice: NormalizedInvoice, target) -> Classification:
     if invoice.settled or invoice.processing:
         if invoice.unverifiable_payment_count:
             return Classification("held", "payment_method_unverifiable",
-                                  "A payment could not be confirmed as an on-chain BTC payment.")
-        if invoice.onchain_payment_count == 0:
+                                  "A payment could not be confirmed as using the payment method chosen at "
+                                  "checkout.")
+        if invoice.matching_payment_count == 0:
             return Classification("held", "not_onchain",
-                                  "The invoice was not paid with an on-chain BTC payment, so it is "
-                                  "held for review.")
-        if invoice.non_onchain_payment_count and not invoice.onchain_payment_count:
+                                  "The invoice was not paid with the on-chain payment method chosen at "
+                                  "checkout, so it is held for review.")
+        if invoice.other_method_payment_count:
             return Classification("held", "not_onchain",
-                                  "The invoice was not paid with an on-chain BTC payment, so it is "
-                                  "held for review.")
+                                  "Part of the invoice was paid with a different payment method than the "
+                                  "one chosen at checkout, so it is held for review.")
 
     if invoice.amount_cents is None:
         return Classification("held", "amount_unreadable", "The invoice amount could not be read.")
@@ -392,27 +441,27 @@ def classify_invoice(invoice: NormalizedInvoice, target) -> Classification:
                               "The invoice amount does not match the price that was quoted.")
 
     if invoice.settled:
-        if invoice.onchain_settled_sats <= 0:
+        if invoice.settled_units <= 0:
             return Classification("held", "no_settled_onchain_amount",
                                   "The settled on-chain amount could not be confirmed.")
-        if not invoice.onchain_confirmed:
+        if not invoice.confirmed:
             return Classification("held", "unconfirmed_onchain_payment",
                                   "The on-chain payment has no confirmation yet.")
-        # Compare against BTCPay's own quoted BTC amount when it is exposed. A
+        # Compare against BTCPay's own quoted amount when it is exposed. A
         # partial or excess payment is held for review, never auto-unlocked.
-        if invoice.due_sats:
-            if invoice.paid_sats < invoice.due_sats:
+        if invoice.due_units:
+            if invoice.paid_units < invoice.due_units:
                 return Classification("held", "underpaid",
                                       "The invoice was underpaid; it is held for review.")
-            if invoice.paid_sats > invoice.due_sats:
+            if invoice.paid_units > invoice.due_units:
                 return Classification("held", "overpaid",
                                       "The invoice was overpaid; it is held for review.")
         if settlement_after_expiry(invoice, target):
             return Classification("held", "late_settlement",
                                   "The payment arrived after the checkout window closed.")
         return Classification("settled", "verified",
-                              "Settled on-chain BTC payment verified with BTCPay Server.",
-                              sats=invoice.onchain_settled_sats, rate=invoice.rate)
+                              "Settled on-chain payment verified with BTCPay Server.",
+                              units=invoice.settled_units, rate=invoice.rate)
 
     if invoice.processing:
         return Classification("processing", "processing",

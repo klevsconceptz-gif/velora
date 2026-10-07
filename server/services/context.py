@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .. import media as media_module
 from ..config import Config, get_config
@@ -20,6 +20,8 @@ class Context:
     email: EmailService
     media: media_module.MediaStore
     started_at: float
+    # Short-lived cache of which payment methods the BTCPay store has enabled.
+    method_cache: dict = field(default_factory=dict)
 
     def now(self) -> float:
         return time.time()
