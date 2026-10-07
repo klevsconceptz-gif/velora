@@ -1,0 +1,29 @@
+# Keep runtime state, secrets and development scratch out of the image context.
+var/
+tmp/
+outbox/
+*.db
+*.db-wal
+*.db-shm
+*.key
+*.eml
+.env
+.env.*
+
+# Not needed to run the app.
+server/tests/
+web/tests/
+tests/
+docs/*.png
+.git/
+.gitignore
+.gitattributes
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+.DS_Store
+*.log
+Dockerfile
+.dockerignore

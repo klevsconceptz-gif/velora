@@ -1,0 +1,45 @@
+# Runtime state. Never commit: this holds the SQLite database, uploaded media,
+# the development session secret and (in development) the email outbox.
+var/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Development secret material and local overrides.
+.env
+.env.*
+!.env.example
+*.key
+!.gitkeep
+
+# Development email outbox.
+outbox/
+*.eml
+index.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / editor / OS
+node_modules/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local scratch
+tmp/
+scratch/
+*.log
