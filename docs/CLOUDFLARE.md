@@ -70,7 +70,9 @@ python3 -m server.cli generate-secret   # → VELORA_EDGE_SECRET  (shared with t
 ```
 
 The same `VELORA_EDGE_SECRET` value goes to the API (as `VELORA_EDGE_SECRET`) and to the
-Worker (as the `EDGE_SECRET` secret). The BTCPay webhook secret comes from BTCPay.
+Worker: store it in Cloudflare Secrets Store as the secret `APITOKEN` (store ID
+`2cb4fb67701a46419d102cd87be0bb2e`), which `wrangler.jsonc` binds to `EDGE_SECRET`.
+The BTCPay webhook secret comes from BTCPay.
 **Never** put any of these in `wrangler.jsonc`, the repository or frontend code.
 
 ---
@@ -164,13 +166,26 @@ docker exec -it velora python3 -m server.cli create-admin
    "vars": { "ORIGIN_URL": "https://velora-api.example.com" }
    ```
 
-2. Add the secret (never in a file). Locally:
+2. Store the secret in Cloudflare Secrets Store (never in a file). `wrangler.jsonc`
+   already binds it:
+
+   ```jsonc
+   "secrets_store_secrets": [
+     { "binding": "EDGE_SECRET", "store_id": "2cb4fb67701a46419d102cd87be0bb2e", "secret_name": "APITOKEN" }
+   ]
+   ```
+
+   Create the secret before the first deploy, locally:
 
    ```bash
    npm ci
    npx wrangler login
-   npx wrangler secret put EDGE_SECRET        # paste the Step 0 value
+   npx wrangler secrets-store secret create 2cb4fb67701a46419d102cd87be0bb2e \
+     --name APITOKEN --scopes workers --remote   # type the Step 0 value at the prompt
    ```
+
+   Do not pass the value with `--value` (it would be left in your shell history). Do
+   not also keep a Worker secret called `EDGE_SECRET`: the binding is what supplies it.
 
 3. Validate and deploy:
 
@@ -180,7 +195,7 @@ docker exec -it velora python3 -m server.cli create-admin
    npm run deploy       # wrangler deploy
    ```
 
-Until `ORIGIN_URL` and `EDGE_SECRET` are both set, `/api/*` answers
+Until `ORIGIN_URL` is set and the `APITOKEN` secret is stored (at least 32 characters), `/api/*` answers
 `503 edge_not_configured` with a plain explanation (the Worker fails closed rather
 than guessing); the static site still loads.
 
@@ -198,10 +213,12 @@ pick this repository and branch, then:
 | Deploy command | `npx wrangler deploy` |
 | Version command | `npx wrangler versions upload` (default) |
 
-After the first deploy open the Worker → **Settings → Variables and Secrets → Add →
-Secret** named `EDGE_SECRET`. (Plain variables in `wrangler.jsonc` such as `ORIGIN_URL`
-are re-applied on every deploy; secrets persist.) The *Build* section's variables are
-for the build container and are **not** where `EDGE_SECRET` goes.
+The edge secret is not a Worker variable. Before the first deploy, create the secret
+`APITOKEN` in the Secrets Store `2cb4fb67701a46419d102cd87be0bb2e` (Cloudflare
+dashboard, or the `wrangler secrets-store` command in Step 2). The `secrets_store_secrets`
+entry in `wrangler.jsonc` binds it as `EDGE_SECRET` on every deploy. (Plain variables such
+as `ORIGIN_URL` are also re-applied on every deploy.) The *Build* section's variables are
+for the build container and are **not** where the secret goes.
 
 ### Attach your domain
 
@@ -252,7 +269,7 @@ configured.
 | Where | Name | Kind | Purpose |
 | --- | --- | --- | --- |
 | Worker | `ORIGIN_URL` | var in `wrangler.jsonc` | `https://` origin of the API (no path). Plain `http://` is accepted only for `localhost` during `wrangler dev`. |
-| Worker | `EDGE_SECRET` | **secret** | Sent as `x-velora-edge-secret`. Must equal the API's `VELORA_EDGE_SECRET`; ≥ 32 characters. |
+| Worker | `EDGE_SECRET` | Secrets Store binding in `wrangler.jsonc` (secret `APITOKEN`, store `2cb4fb67701a46419d102cd87be0bb2e`) | Sent as `x-velora-edge-secret`. Must equal the API's `VELORA_EDGE_SECRET`; ≥ 32 characters. Read by `readEdgeSecret()` in `cloudflare/worker.js`; a missing, unreadable or short value fails closed with `503 edge_not_configured`. |
 | API | `VELORA_EDGE_SECRET` | secret env | Enables edge mode: refuse `/api/*` without the secret (except `/api/health`), take the client address only from `x-velora-client-ip`. |
 | API | `VELORA_PUBLIC_BASE_URL` | env | The public **site** URL used in emails and redirects. |
 
@@ -274,7 +291,8 @@ by default); Cloudflare's request-body cap on Free/Pro is 100 MB, well above the
 | Build: *"Missing entry-point"*, *"Could not detect…"*, or nothing to deploy | No Worker config was found. `wrangler.jsonc` must be at the repository root of the build (Root directory `/`). Use **Workers**, not Pages. |
 | Build: *"The name in your Wrangler configuration file … must match the name of your Worker"* | The dashboard project name must equal `"name": "velora"` in `wrangler.jsonc` (or change both) — [documented requirement](https://developers.cloudflare.com/workers/ci-cd/builds/troubleshoot/). If it happens **only on non-production branches** with the name correct, it is a [known Workers Builds issue](https://github.com/cloudflare/workers-sdk/issues/15682); set that branch's deploy command to `env -u WRANGLER_CI_MATCH_TAG npx wrangler versions upload`, or build from your production branch. |
 | Build tries to run Python / `pip install` | Clear the Build command. Velora needs no build; Python runs on the API origin only. |
-| Deploy succeeds but the site shows API errors | `/api/*` returns `503 edge_not_configured` → set `ORIGIN_URL` in `wrangler.jsonc` and the `EDGE_SECRET` secret, redeploy. |
+| Deploy succeeds but the site shows API errors | `/api/*` returns `503 edge_not_configured` → set `ORIGIN_URL` in `wrangler.jsonc` and store the `APITOKEN` secret (≥ 32 characters), redeploy. |
+| `503 edge_not_configured` although `ORIGIN_URL` is set | The Worker cannot read `EDGE_SECRET`: `APITOKEN` is missing from store `2cb4fb67701a46419d102cd87be0bb2e`, the store ID in `wrangler.jsonc` is wrong, or the stored value is shorter than 32 characters. Fix the secret, then redeploy. |
 | `403 edge_required` from every API call | `EDGE_SECRET` (Worker) ≠ `VELORA_EDGE_SECRET` (API). Re-set one so they are identical. |
 | `502 origin_unreachable` / Cloudflare 521–523 | The API host or tunnel is down, or not HTTPS. Re-run the origin checks in Step 1. |
 | Cloudflare error 1003 / 1000 | `ORIGIN_URL` uses an IP address or a hostname that resolves to Cloudflare itself (loop). Use a separate API hostname. |
@@ -300,8 +318,15 @@ Verified in this repository (see `server/tests/test_cloudflare.py`,
   email → verify → login through the proxy, session cookie flags, CSRF and
   foreign-origin refusal, webhook route body passthrough, upload-limit response, direct
   calls to the origin refused without the secret, spoofed client headers ignored.
-* Unit tests cover header stripping, streaming bodies, fail-closed configuration and
-  the 502 path.
+* `wrangler deploy --dry-run` lists the `EDGE_SECRET` Secrets Store binding
+  (`APITOKEN` in store `2cb4fb67701a46419d102cd87be0bb2e`).
+* Unit tests cover header stripping, streaming bodies, fail-closed configuration, the
+  502 path, and `readEdgeSecret()` (plain string or Secrets Store binding; missing,
+  throwing, non-string or 31-character values all fail closed).
+
+**Not** verified: reading the secret from the live Secrets Store. Local `wrangler dev`
+needs `--remote` to resolve a store secret (wrangler says so when it is missing); confirm
+it on your first run.
 
 **Not** verified (needs your Cloudflare account and hosts): a real remote deploy,
 Workers Builds settings, custom domain, a Cloudflare Tunnel, behaviour under

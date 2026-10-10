@@ -21,6 +21,15 @@
     "ORIGIN_URL": ""
   },
 
+  // The edge secret lives in Cloudflare Secrets Store, never in this file. The Worker
+  // reads it as env.EDGE_SECRET (see cloudflare/worker.js and docs/CLOUDFLARE.md).
+  "secrets_store_secrets": [
+    {
+      "binding": "EDGE_SECRET",
+      "store_id": "2cb4fb67701a46419d102cd87be0bb2e",
+      "secret_name": "APITOKEN"
+    }
+  ],
+
   "observability": { "enabled": true }
-  // Secret (never in this file): EDGE_SECRET  →  `npx wrangler secret put EDGE_SECRET`
 }

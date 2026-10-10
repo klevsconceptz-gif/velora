@@ -14,7 +14,9 @@
  *
  * Configuration
  *   ORIGIN_URL   (var, wrangler.jsonc)  https origin of the Velora API, no path.
- *   EDGE_SECRET  (secret)               must equal VELORA_EDGE_SECRET on the API.
+ *   EDGE_SECRET  (Secrets Store binding, wrangler.jsonc)  must equal
+ *                                        VELORA_EDGE_SECRET on the API. A plain
+ *                                        string is also accepted (tests, dev).
  */
 
 const SECURITY_HEADERS = {
@@ -30,6 +32,32 @@ const STRIP_REQUEST_HEADERS = [
   'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-real-ip',
   'true-client-ip', 'x-velora-edge-secret', 'x-velora-client-ip',
 ];
+
+const EDGE_SECRET_MIN_LENGTH = 32;
+
+/**
+ * Read the edge secret. `env.EDGE_SECRET` is a Secrets Store binding (an object
+ * with an async get()); a plain string is accepted too. Returns the secret, or
+ * null when it is missing, unreadable, not a string, or shorter than 32
+ * characters. Callers treat null as "not configured" and fail closed.
+ */
+export async function readEdgeSecret(env) {
+  const binding = env ? env.EDGE_SECRET : undefined;
+  let value;
+  try {
+    if (typeof binding === 'string') {
+      value = binding;
+    } else if (binding && typeof binding.get === 'function') {
+      value = await binding.get();
+    } else {
+      return null;
+    }
+  } catch {
+    return null; // the store could not be read; never fall back to anything else
+  }
+  if (typeof value !== 'string' || value.length < EDGE_SECRET_MIN_LENGTH) return null;
+  return value;
+}
 
 const METHODS_WITH_BODY = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -77,9 +105,10 @@ export async function proxyApi(request, env) {
   const url = new URL(request.url);
   const origin = parseOrigin(env, url);
   if (origin instanceof Response) return origin;
-  if (!env.EDGE_SECRET || String(env.EDGE_SECRET).length < 32) {
+  const edgeSecret = await readEdgeSecret(env);
+  if (edgeSecret === null) {
     return failure(503, 'edge_not_configured',
-      'The EDGE_SECRET secret is missing or shorter than 32 characters on this Worker.');
+      'The EDGE_SECRET secret is missing, unreadable or shorter than 32 characters on this Worker.');
   }
 
   const headers = new Headers(request.headers);
@@ -88,7 +117,7 @@ export async function proxyApi(request, env) {
   for (const name of [...headers.keys()]) {
     if (name.startsWith('cf-') || name.startsWith('x-envoy-')) headers.delete(name);
   }
-  headers.set('x-velora-edge-secret', env.EDGE_SECRET);
+  headers.set('x-velora-edge-secret', edgeSecret);
   const clientIp = request.headers.get('cf-connecting-ip');
   if (clientIp) headers.set('x-velora-client-ip', clientIp);
   headers.set('x-forwarded-host', url.host);

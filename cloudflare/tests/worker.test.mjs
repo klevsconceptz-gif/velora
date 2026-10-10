@@ -1,7 +1,7 @@
 // Unit tests for cloudflare/worker.js, run with `node --test` (no dependencies).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { parseOrigin, proxyApi } from '../worker.js';
+import worker, { parseOrigin, proxyApi, readEdgeSecret } from '../worker.js';
 
 const SECRET = 's'.repeat(40);
 const ENV = { ORIGIN_URL: 'https://api.velora.test', EDGE_SECRET: SECRET };
@@ -160,4 +160,91 @@ test('non-API paths are handed to static assets', async () => {
   const response = await worker.fetch(new Request('https://velora.test/c/someone'), env);
   assert.equal(await response.text(), 'shell');
   assert.deepEqual(seen, ['/c/someone']);
+});
+
+// --- EDGE_SECRET: plain string or Secrets Store binding -------------------
+
+/** A stand-in for a Secrets Store binding: an object whose get() resolves to the value. */
+const storeBinding = (value) => ({ get: async () => value });
+
+test('readEdgeSecret accepts a plain string of at least 32 characters', async () => {
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: SECRET }), SECRET);
+});
+
+test('readEdgeSecret reads a Secrets Store binding via get()', async () => {
+  let calls = 0;
+  const binding = { get: async () => { calls += 1; return SECRET; } };
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: binding }), SECRET);
+  assert.equal(calls, 1);
+});
+
+test('readEdgeSecret accepts a value of exactly 32 characters and refuses 31', async () => {
+  const exact = 'x'.repeat(32);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: exact }), exact);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: storeBinding(exact) }), exact);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: 'x'.repeat(31) }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: storeBinding('x'.repeat(31)) }), null);
+});
+
+test('readEdgeSecret fails closed (null) when the secret is missing or empty', async () => {
+  assert.equal(await readEdgeSecret({}), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: undefined }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: null }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: '' }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: storeBinding(null) }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: storeBinding(undefined) }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: storeBinding('') }), null);
+  assert.equal(await readEdgeSecret(undefined), null);
+});
+
+test('readEdgeSecret fails closed when the binding throws or returns a non-string', async () => {
+  const throwing = { get: async () => { throw new Error('store unavailable: secret APITOKEN'); } };
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: throwing }), null);
+  const syncThrow = { get() { throw new Error('boom'); } };
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: syncThrow }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: storeBinding(12345678901234567890123456789012345) }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: { notAGetter: true } }), null);
+  assert.equal(await readEdgeSecret({ EDGE_SECRET: 42 }), null);
+});
+
+test('proxyApi forwards the value read from a Secrets Store binding', async () => {
+  await withFetch(ok, async (calls) => {
+    const response = await worker.fetch(
+      new Request('https://velora.test/api/bootstrap'),
+      { ORIGIN_URL: 'https://api.velora.test', EDGE_SECRET: storeBinding(SECRET) },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.headers.get('x-velora-edge-secret'), SECRET);
+  });
+});
+
+test('proxyApi fails closed with 503 and forwards nothing when the binding errors', async () => {
+  const throwing = { get: async () => { throw new Error('network down'); } };
+  await withFetch(ok, async (calls) => {
+    const response = await proxyApi(new Request('https://velora.test/api/bootstrap'),
+      { ORIGIN_URL: 'https://api.velora.test', EDGE_SECRET: throwing });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, 'edge_not_configured');
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('proxyApi fails closed when the binding returns a secret shorter than 32 characters', async () => {
+  await withFetch(ok, async (calls) => {
+    const response = await proxyApi(new Request('https://velora.test/api/bootstrap'),
+      { ORIGIN_URL: 'https://api.velora.test', EDGE_SECRET: storeBinding('short') });
+    assert.equal(response.status, 503);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('proxyApi fails closed when the binding returns nothing', async () => {
+  await withFetch(ok, async (calls) => {
+    const response = await proxyApi(new Request('https://velora.test/api/bootstrap'),
+      { ORIGIN_URL: 'https://api.velora.test', EDGE_SECRET: storeBinding(null) });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, 'edge_not_configured');
+    assert.equal(calls.length, 0);
+  });
 });
