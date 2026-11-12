@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm run check && npm test",
     "test": "node tests/validation.mjs && node tests/app-smoke.mjs",
     "check": "node --check src/app.js && node --check src/data.js && node --check src/store.js && node --check src/security.js && node --check src/api.js && node --check 'functions/api/[[path]].js'",
     "integration": "node tests/pages-e2e.mjs"

@@ -32,7 +32,7 @@ Admin authentication is handled by the Pages Function when D1 is enabled. Set `A
 ## D1 and Cloudflare Pages
 
 - Apply `migrations/0001_initial.sql` to provision user accounts, sessions, wallet ledger, payment requests, transfers, messages, announcements and payment methods.
-- Pages publish directory: repository root (`.`); no frontend build step is used.
+- Pages publish directory: repository root (`.`); `npm run build` runs syntax and UI/API smoke checks without bundling or moving the frontend files.
 - Security response headers, CSP and SPA fallback: root `_headers` and `_redirects`.
 - Deployment notes and publish-folder copies: `deploy/cloudflare-pages/`.
 - SEO metadata, robots rules, sitemap, web manifest and local favicon/social card are in the root and `assets/images/`.

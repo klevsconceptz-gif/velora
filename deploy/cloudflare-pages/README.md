@@ -1,17 +1,17 @@
 # Cloudflare Pages deployment
 
-Goal system is a no-build Pages project. The **repository root** is the complete Pages output directory; keep `pages_build_output_dir = "."` in the root `wrangler.toml`. Pages Functions live in `functions/api/` and bind to D1 as `DB`.
+Goal system has no frontend bundling step. The **repository root** is the complete Pages output directory; keep `pages_build_output_dir = "."` in the root `wrangler.toml`. Set the Pages build command to `npm run build` to run syntax/UI/API smoke checks; it leaves the static files in place. Pages Functions live in `functions/api/` and bind to D1 as `DB`.
 
 ## Provision and deploy
 
 1. Create a D1 database: `npx wrangler d1 create goal-system-db`.
 2. Replace the placeholder `database_id` in the root `wrangler.toml` with the returned ID.
 3. Apply the schema remotely: `npx wrangler d1 migrations apply goal-system-db --remote`.
-4. Confirm the Pages project uses the root as its output directory and has the `DB` D1 binding (the root Wrangler configuration declares it).
+4. Set the Pages build command to `npm run build`, output directory to the repository root (`.`), and confirm the `DB` D1 binding (declared in the root Wrangler configuration).
 5. Set `ADMIN_PASSWORD` as a Cloudflare Pages secret to rotate the required initial administrator password: `npx wrangler pages secret put ADMIN_PASSWORD --project-name goal-system`.
 6. Deploy the repository root: `npx wrangler pages deploy . --project-name goal-system`.
 
-The static client has no production build step. Its `/api/*` requests are same-origin and are served by `functions/api/[[path]].js`. The D1 schema is in `migrations/0001_initial.sql`.
+The client files are served as-is after the build checks. Its `/api/*` requests are same-origin and are served by `functions/api/[[path]].js`. The D1 schema is in `migrations/0001_initial.sql`.
 
 ## Local full-stack check
 
