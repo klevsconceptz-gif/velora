@@ -1,0 +1,10 @@
+name = "goal-system"
+pages_build_output_dir = "."
+compatibility_date = "2025-07-18"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "goal-system-db"
+# Replace this value with the database_id returned by `wrangler d1 create goal-system-db`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

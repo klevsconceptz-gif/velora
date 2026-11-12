@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://goal-system.pages.dev/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://goal-system.pages.dev/#platform</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://goal-system.pages.dev/#advice</loc><changefreq>daily</changefreq><priority>0.7</priority></url>
+  <url><loc>https://goal-system.pages.dev/#markets</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://goal-system.pages.dev/#properties</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://goal-system.pages.dev/#shop</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://goal-system.pages.dev/#plans</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+</urlset>
