@@ -1,17 +1,16 @@
-"""Cloudflare deployment files stay consistent with the server.
+"""Cloudflare deployment files and the archived Worker remain testable.
 
-* the Worker's proxy behaviour (Node unit tests, no dependencies),
-* ``web/_headers`` carries the same security policy as ``server/app.py``,
-* ``wrangler.jsonc`` is wired the way docs/CLOUDFLARE.md says and holds no secrets,
-* test code and config files are neither uploaded to Cloudflare nor served by the origin.
+* the Pages deployment config points at the generated Goal system bundle and D1,
+* the Pages Functions module and D1 migration are present,
+* the archived Worker's proxy behaviour remains covered by Node unit tests,
+* the earlier server frontend headers and static hygiene remain covered.
 """
 
 from __future__ import annotations
 
-import json
-import re
 import shutil
 import subprocess
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -21,13 +20,8 @@ from .harness import Client, VeloraTestCase
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _strip_jsonc(text: str) -> str:
-    text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
-    return re.sub(r",(\s*[}\]])", r"\1", text)
-
-
 def _wrangler() -> dict:
-    return json.loads(_strip_jsonc((ROOT / "wrangler.jsonc").read_text()))
+    return tomllib.loads((ROOT / "wrangler.toml").read_text())
 
 
 def _headers_rules() -> dict[str, dict[str, str]]:
@@ -73,22 +67,25 @@ class HeadersParityTests(unittest.TestCase):
 
 
 class WranglerConfigTests(unittest.TestCase):
-    def test_config_is_wired_as_documented(self):
+    def test_pages_config_points_at_goal_system_assets_and_d1_functions(self):
         config = _wrangler()
-        self.assertEqual(config["main"], "cloudflare/worker.js")
-        self.assertTrue((ROOT / config["main"]).is_file())
-        assets = config["assets"]
-        self.assertEqual(assets["directory"], "./web")
-        self.assertEqual(assets["run_worker_first"], ["/api/*"])
-        self.assertEqual(assets["not_found_handling"], "single-page-application")
-        self.assertEqual(assets["binding"], "ASSETS")
+        self.assertEqual(config["name"], "goal-system")
+        self.assertEqual(config["pages_build_output_dir"], "deploy/cloudflare-pages/site")
         self.assertRegex(config["compatibility_date"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(len(config["d1_databases"]), 1)
+        database = config["d1_databases"][0]
+        self.assertEqual(database["binding"], "DB")
+        self.assertEqual(database["database_name"], "goal-system-db")
+        self.assertEqual(database["migrations_dir"], "migrations")
+        self.assertTrue((ROOT / "functions" / "api" / "[[path]].js").is_file())
+        self.assertTrue((ROOT / "migrations" / "0001_initial.sql").is_file())
 
-    def test_the_config_holds_no_secret_and_no_placeholder_origin(self):
-        text = (ROOT / "wrangler.jsonc").read_text()
-        self.assertEqual(_wrangler()["vars"], {"ORIGIN_URL": ""})
-        self.assertNotRegex(text, r'"EDGE_SECRET"\s*:')
-        self.assertNotIn("example.com", json.dumps(_wrangler()))
+    def test_the_pages_config_contains_no_secrets(self):
+        text = (ROOT / "wrangler.toml").read_text()
+        self.assertNotIn("ADMIN_PASSWORD", text)
+        self.assertNotIn("EDGE_SECRET", text)
+        self.assertEqual(_wrangler()["d1_databases"][0]["database_id"],
+                         "00000000-0000-0000-0000-000000000000")
 
     def test_dev_secrets_are_ignored_by_git_and_docker(self):
         self.assertIn(".dev.vars", (ROOT / ".gitignore").read_text())

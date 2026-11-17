@@ -1,5 +1,4 @@
-# Runtime state. Never commit: this holds the SQLite database, uploaded media,
-# the development session secret and (in development) the email outbox.
+# Runtime state. Never commit: SQLite databases, uploaded media, local secrets and mail outbox.
 var/
 *.db
 *.db-wal
@@ -7,12 +6,14 @@ var/
 *.sqlite
 *.sqlite3
 
-# Development secret material and local overrides.
+# Development secrets and local overrides.
 .env
 .env.*
 !.env.example
 *.key
 !.gitkeep
+.dev.vars
+.dev.vars.*
 
 # Development email outbox.
 outbox/
@@ -39,12 +40,11 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Local scratch
+# Local scratch and logs
 tmp/
 scratch/
 *.log
 
-# Cloudflare / wrangler
+# Cloudflare / Wrangler and generated Pages output
 .wrangler/
-.dev.vars
-.dev.vars.*
+deploy/cloudflare-pages/site/

@@ -1,0 +1,10 @@
+{
+  "name": "Goal system",
+  "short_name": "Goal system",
+  "description": "Plan with purpose. Build with clarity.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090a11",
+  "theme_color": "#0a0b12",
+  "icons": [{ "src": "/assets/images/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

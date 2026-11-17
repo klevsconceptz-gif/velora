@@ -221,6 +221,3 @@ def set_post_tiers(request, ctx, auth, params):
     payload = dict(request.json())
     payload["tier_ids"] = payload.get("tier_ids", [])
     return ok(posts_service.update_post(ctx, auth, params["post_id"], {"tier_ids": payload["tier_ids"]}))
-
-
-

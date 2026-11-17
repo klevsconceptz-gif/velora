@@ -136,7 +136,7 @@ jobs:
         run: cat /tmp/velora.log || true
 
   cloudflare:
-    name: Cloudflare Worker config
+    name: Cloudflare Pages Functions
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -149,13 +149,11 @@ jobs:
           node-version: '22'
           cache: npm
 
-      # The same install and validation Cloudflare's own build runs, minus the
-      # upload: no account, token or secret is needed here.
-      - name: Install wrangler (locked)
+      - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Worker unit tests
-        run: npm test
+      - name: Run Goal system build and tests
+        run: npm run build
 
-      - name: Validate wrangler.jsonc and bundle the Worker (dry run)
-        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/wrangler-dry-run"
+      - name: Bundle Pages Functions without deploying
+        run: npm run pages:functions:build

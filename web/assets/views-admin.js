@@ -915,4 +915,3 @@ export async function invitationsPage(params, query, context) {
     ),
   ]);
 }
-
