@@ -60,7 +60,7 @@ assert.equal(new Set(PROPERTIES.map(item => item.image)).size, PROPERTIES.length
 
 for (const header of ['X-Frame-Options: DENY','X-Content-Type-Options: nosniff','Referrer-Policy: strict-origin-when-cross-origin','Permissions-Policy:']) assert.ok(headers.includes(header), `Missing deployment header ${header}`);
 assert.ok(await exists('deploy/cloudflare-pages/README.md'));
-assert.equal(wrangler.match(/pages_build_output_dir\s*=\s*"([^"]+)"/)?.[1], '.', 'Pages must publish the complete repository root, not the docs-only deploy folder.');
+assert.equal(wrangler.match(/pages_build_output_dir\s*=\s*"([^"]+)"/)?.[1], 'deploy/cloudflare-pages/site', 'Pages must publish the generated app bundle, not the source or docs folder.');
 assert.ok(wrangler.includes('binding = "DB"'), 'Pages Functions must bind the D1 database as DB.');
 assert.ok(!redirects.includes('/* /index.html 200'), 'Avoid Pages self-rewrite loop for index.html.');
 assert.ok(await exists('migrations/0001_initial.sql'));

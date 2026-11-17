@@ -1,5 +1,50 @@
-.wrangler/
-node_modules/
+# Runtime state. Never commit: SQLite databases, uploaded media, local secrets and mail outbox.
+var/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Development secrets and local overrides.
 .env
 .env.*
+!.env.example
+*.key
+!.gitkeep
+.dev.vars
+.dev.vars.*
+
+# Development email outbox.
+outbox/
+*.eml
+index.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / editor / OS
+node_modules/
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local scratch and logs
+tmp/
+scratch/
+*.log
+
+# Cloudflare / Wrangler and generated Pages output
+.wrangler/
+deploy/cloudflare-pages/site/

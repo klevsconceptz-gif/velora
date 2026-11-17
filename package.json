@@ -2,10 +2,17 @@
   "name": "goal-system",
   "private": true,
   "type": "module",
+  "description": "Goal system Cloudflare Pages app with D1-backed Functions.",
   "scripts": {
-    "build": "npm run check && npm test",
-    "test": "node tests/validation.mjs && node tests/app-smoke.mjs",
-    "check": "node --check src/app.js && node --check src/data.js && node --check src/store.js && node --check src/security.js && node --check src/api.js && node --check 'functions/api/[[path]].js'",
-    "integration": "node tests/pages-e2e.mjs"
+    "build": "npm run check && npm test && node scripts/build-pages.mjs",
+    "test": "node tests/validation.mjs && node tests/app-smoke.mjs && node --test cloudflare/tests/worker.test.mjs",
+    "check": "node --check src/app.js && node --check src/data.js && node --check src/store.js && node --check src/security.js && node --check src/api.js && node --check 'functions/api/[[path]].js' && node --check cloudflare/worker.js",
+    "integration": "node tests/pages-e2e.mjs",
+    "dev": "wrangler pages dev deploy/cloudflare-pages/site --ip 0.0.0.0 --port 8788",
+    "pages:functions:build": "wrangler pages functions build functions --project-directory . --build-output-directory deploy/cloudflare-pages/site --outdir .wrangler/functions-build",
+    "deploy": "wrangler pages deploy deploy/cloudflare-pages/site --project-name goal-system"
+  },
+  "devDependencies": {
+    "wrangler": "^4.160.1"
   }
 }
